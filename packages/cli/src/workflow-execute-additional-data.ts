@@ -369,6 +369,9 @@ async function startExecution(
 			workflowData,
 			additionalData.userId,
 			options.parentExecution,
+			undefined,
+			undefined,
+			options.node,
 		);
 		additionalDataIntegrated.executionId = executionId;
 		additionalDataIntegrated.parentCallbackManager = options.parentCallbackManager;
