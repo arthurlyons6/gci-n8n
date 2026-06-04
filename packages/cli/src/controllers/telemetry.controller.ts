@@ -71,6 +71,12 @@ export class TelemetryController {
 				: 'Content-Type, Authorization, anonymousId',
 		);
 		res.setHeader('Access-Control-Max-Age', '600');
+		// Security invariant: `Access-Control-Allow-Origin: *` must NEVER be paired
+		// with credentials, or any website could read authenticated responses using
+		// the visitor's cookies. These endpoints are unauthenticated and
+		// cookie-stripped, so `*` is safe — but only as long as credentials stay
+		// off. Explicitly ensure no upstream/middleware layer slipped the header in.
+		res.removeHeader('Access-Control-Allow-Credentials');
 	}
 
 	@Options('/proxy/:version/:action', { skipAuth: true })
