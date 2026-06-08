@@ -144,6 +144,7 @@ describe('POST /n8n-packages/import', () => {
 					name: 'HTTP Imported',
 					projectId: ownerPersonalProject.id,
 					parentFolderId: null,
+					active: false,
 					activeVersionId: null,
 					status: 'created',
 				},

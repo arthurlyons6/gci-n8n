@@ -10,15 +10,16 @@ post:
 
     Imports a gzip-compressed tar package (`.n8np`) into the target project. Send the
     archive as the multipart field `package`. Optional routing uses form fields
-    `projectId`, `folderId`, `credentialMatchingMode`, and `credentialMissingMode`
-    (omit or leave empty for defaults). The required `workflowConflictPolicy` field
-    controls what happens when a package workflow matches an existing workflow by
-    source id in the target project. Maximum upload size is
-    `N8N_ENDPOINTS_PAYLOAD_SIZE_MAX` MB (default 16).
+    `projectId`, `folderId`, `credentialMatchingMode`, `credentialMissingMode`,
+    and `workflowPublishingPolicy` (omit or leave empty for defaults). The required
+    `workflowConflictPolicy` field controls what happens when a package workflow
+    matches an existing workflow by source id in the target project. Maximum upload
+    size is `N8N_ENDPOINTS_PAYLOAD_SIZE_MAX` MB (default 16).
 
     The package must declare its manifest at `manifest.json` and include every file
     referenced by the manifest. The caller is authorised through the `workflow:import`
-    scope. Newly created workflows receive a fresh local id and arrive inactive.
+    scope. Newly created workflows arrive inactive unless
+    `workflowPublishingPolicy` publishes them after import.
 
     Credential references are resolved before any workflow is written. Only credentials owned by the
     target project (with `credential:read`) or global credentials (with `credential:read`)
@@ -74,6 +75,22 @@ post:
                 `new-version` updates matching workflows and creates a new version,
                 `fail` rejects the import when any matching workflow exists, and
                 `skip` leaves matching workflows untouched while importing the rest.
+            workflowPublishingPolicy:
+              type: string
+              enum:
+                - preserve-published-version
+                - match-source
+                - all-published
+                - all-unpublished
+              default: preserve-published-version
+              description: >
+                Controls whether imported workflows are published after content is
+                written. `preserve-published-version` keeps new workflows inactive
+                and republishes updated workflows that were already published.
+                `match-source` follows the package workflow's published flag.
+                `all-published` publishes every imported workflow.
+                `all-unpublished` leaves new workflows inactive and unpublishes
+                updated workflows that were published.
   responses:
     '200':
       description: Import succeeded.
@@ -110,6 +127,7 @@ post:
                     - name
                     - projectId
                     - parentFolderId
+                    - active
                     - activeVersionId
                     - status
                   properties:
@@ -126,6 +144,9 @@ post:
                     parentFolderId:
                       type: string
                       nullable: true
+                    active:
+                      type: boolean
+                      description: Whether the workflow is published on the target instance after import.
                     activeVersionId:
                       type: string
                       nullable: true

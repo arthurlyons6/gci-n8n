@@ -1,3 +1,4 @@
+import type { WorkflowEntity } from '@n8n/db';
 import { Service } from '@n8n/di';
 
 import type { PackageImportBindings, WorkflowConflictPolicy } from '../../n8n-packages.types';
@@ -13,6 +14,7 @@ import type {
 export interface WorkflowImportResult {
 	outcomes: WorkflowImportOutcome[];
 	bindings: PackageImportBindings;
+	matchesBySourceWorkflowId: Map<string, WorkflowEntity>;
 }
 
 /**
@@ -65,6 +67,10 @@ export class WorkflowImporter {
 			workflowBindings.set(sourceWorkflowId, outcome.workflow.id);
 		}
 
-		return { outcomes, bindings: { ...bindings, workflows: workflowBindings } };
+		return {
+			outcomes,
+			bindings: { ...bindings, workflows: workflowBindings },
+			matchesBySourceWorkflowId: matchBySourceWorkflowId,
+		};
 	}
 }

@@ -17,6 +17,7 @@ import { CredentialImporter } from '../entities/credential/credential-importer';
 import { resolvedBindingsToSummaries } from '../entities/credential/credential.types';
 import type { PreparedWorkflow } from '../entities/workflow/workflow-conflict-policy.types';
 import { WorkflowImporter } from '../entities/workflow/workflow-importer';
+import { WorkflowPublishingImporter } from '../entities/workflow/workflow-publishing-importer';
 import { WorkflowSerializer } from '../entities/workflow/workflow.serializer';
 import { TarPackageReader } from '../io/tar/tar-package-reader';
 import { createBindings, serializeBindings } from '../n8n-packages.types';
@@ -44,6 +45,7 @@ export class ImportPipeline {
 		private readonly folderService: FolderService,
 		private readonly eventService: EventService,
 		private readonly workflowImporter: WorkflowImporter,
+		private readonly workflowPublishingImporter: WorkflowPublishingImporter,
 	) {
 		this.maxUncompressedPackageBytes = globalConfig.endpoints.payloadSizeMax * MEGABYTE_IN_BYTES;
 	}
@@ -59,6 +61,12 @@ export class ImportPipeline {
 			request.folderId,
 		);
 
+		await this.workflowPublishingImporter.preflight(
+			request.user,
+			target.projectId,
+			request.workflowPublishingPolicy,
+		);
+
 		// Validates every workflow first so a malformed package aborts before the first DB write.
 		const prepared = await this.prepareWorkflows(manifest.workflows ?? [], reader);
 
@@ -70,16 +78,17 @@ export class ImportPipeline {
 			user: request.user,
 		});
 
-		const { outcomes, bindings } = await this.workflowImporter.importWorkflows(
-			prepared,
-			request.workflowConflictPolicy,
-			{
-				user: request.user,
-				projectId: target.projectId,
-				folderId: target.folderId,
-			},
-			createBindings({ credentials: credentialResolution.successes }),
-		);
+		const { outcomes, bindings, matchesBySourceWorkflowId } =
+			await this.workflowImporter.importWorkflows(
+				prepared,
+				request.workflowConflictPolicy,
+				{
+					user: request.user,
+					projectId: target.projectId,
+					folderId: target.folderId,
+				},
+				createBindings({ credentials: credentialResolution.successes }),
+			);
 
 		const matchedCredentials = resolvedBindingsToSummaries(credentialResolution.successes);
 
@@ -93,21 +102,23 @@ export class ImportPipeline {
 			matchedCredentialIds: matchedCredentials.map((m) => m.targetId),
 		});
 
+		// Post-pass: workflowPublishingPolicy is the sole owner of publish/unpublish in import.
+		const workflows = await this.workflowPublishingImporter.applyPublishingPolicy({
+			user: request.user,
+			projectId: target.projectId,
+			publishingPolicy: request.workflowPublishingPolicy,
+			prepared,
+			outcomes,
+			matchesBySourceWorkflowId,
+		});
+
 		return {
 			package: {
 				sourceN8nVersion: manifest.sourceN8nVersion,
 				sourceId: manifest.sourceId,
 				exportedAt: manifest.exportedAt,
 			},
-			workflows: outcomes.map(({ workflow, sourceWorkflowId, status }) => ({
-				sourceWorkflowId,
-				localId: workflow.id,
-				name: workflow.name,
-				projectId: target.projectId,
-				parentFolderId: workflow.parentFolder?.id ?? null,
-				activeVersionId: workflow.activeVersionId ?? null,
-				status,
-			})),
+			workflows,
 			bindings: serializeBindings(bindings),
 		};
 	}

@@ -30,7 +30,8 @@ export class WorkflowConflictPolicyNewVersionHandler extends WorkflowConflictPol
 
 		const workflow = await this.workflowService.update(context.user, entity, match.id, {
 			publicApi: true,
-			publishIfActive: true,
+			publishIfActive: false,
+			skipActivation: true,
 			source: 'import',
 		});
 		workflow.parentFolder = match.parentFolder;
