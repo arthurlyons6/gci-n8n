@@ -76,6 +76,7 @@ const {
 	nodes: mappedWorkflowNodes,
 	connections: mappedConnections,
 	nodeDisplaySizeById,
+	groupAggregates,
 } = useCanvasMapping({
 	nodes,
 	connections,
@@ -92,6 +93,7 @@ const mappedGroupVueFlowNodes = computed(() =>
 		getNodeDisplaySize: (id) => nodeDisplaySizeById.value[id],
 		isGroupCollapsed: (id) => nodeGroupView.isGroupCollapsed(id),
 		readOnly: readOnlyRef.value || suppressInteractionRef.value,
+		aggregates: groupAggregates.value,
 	}),
 );
 

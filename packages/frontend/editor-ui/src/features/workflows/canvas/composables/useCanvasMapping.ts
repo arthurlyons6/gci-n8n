@@ -25,6 +25,7 @@ import type {
 } from '../canvas.types';
 import { CanvasConnectionMode, CanvasNodeRenderType } from '../canvas.types';
 import type { CanvasNodeGroupView } from './useCanvasNodeGroupView';
+import type { GroupAggregateInputs } from './useCanvasMapping.groups';
 import {
 	buildCollapsedGroupByNodeId,
 	remapCollapsedGroupConnections,
@@ -606,6 +607,22 @@ export function useCanvasMapping({
 		return dimensionsById;
 	});
 
+	const groupAggregates = computed<GroupAggregateInputs>(() => {
+		const nodeIterationsById: Record<string, number> = {};
+		for (const node of nodes.value) {
+			nodeIterationsById[node.id] =
+				filterOutCanceled(nodeExecutionRunDataById.value[node.id])?.length ?? 0;
+		}
+		return {
+			nodeExecutionRunningById: nodeExecutionRunningById.value,
+			nodeExecutionWaitingForNextById: nodeExecutionWaitingForNextById.value,
+			nodeExecutionWaitingById: nodeExecutionWaitingById.value,
+			nodeHasIssuesById: nodeHasIssuesById.value,
+			nodeExecutionStatusById: nodeExecutionStatusById.value,
+			nodeIterationsById,
+		};
+	});
+
 	const mappedNodes = computed<CanvasNode[]>(() => {
 		const connectionsBySourceNode = connections.value;
 		const connectionsByDestinationNode =
@@ -802,6 +819,7 @@ export function useCanvasMapping({
 		nodeExecutionWaitingForNextById,
 		nodeHasIssuesById,
 		nodeDisplaySizeById,
+		groupAggregates,
 		connections: mappedConnections,
 		nodes: mappedNodes,
 	};
