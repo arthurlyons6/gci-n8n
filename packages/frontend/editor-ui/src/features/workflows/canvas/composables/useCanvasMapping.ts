@@ -35,6 +35,7 @@ import {
 	computeNodeDisplaySize,
 	mapLegacyConnectionsToCanvasConnections,
 	parseCanvasConnectionHandleString,
+	resolveCanonicalConnection,
 } from '../canvas.utils';
 import type {
 	ExecutionStatus,
@@ -700,39 +701,47 @@ export function useCanvasMapping({
 	});
 
 	function getConnectionData(connection: CanvasConnection): CanvasConnectionData {
-		const { type, index } = parseCanvasConnectionHandleString(connection.sourceHandle);
-		const runData = nodeExecutionRunDataOutputMapById.value[connection.source]?.[type]?.[index];
+		// Collapsed-group remapping rewrites `connection.source` / `.target` to
+		// `group:*` ids for display; the real workflow endpoints live on
+		// `data.canonical` so execution-state lookups still resolve correctly.
+		const canonical = resolveCanonicalConnection(connection);
+		const sourceNodeId = canonical.source;
+		const targetNodeId = canonical.target;
+
+		const { type, index } = parseCanvasConnectionHandleString(canonical.sourceHandle);
+
+		const runData = nodeExecutionRunDataOutputMapById.value[sourceNodeId]?.[type]?.[index];
 		const runDataTotal = runData?.total ?? 0;
 
-		const sourceTasks = nodeExecutionRunDataById.value[connection.source] ?? [];
+		const sourceTasks = nodeExecutionRunDataById.value[sourceNodeId] ?? [];
 		let lastSourceTask: ITaskData | undefined = sourceTasks[sourceTasks.length - 1];
 		if (lastSourceTask?.executionStatus === 'canceled' && sourceTasks.length > 1) {
 			lastSourceTask = sourceTasks[sourceTasks.length - 2];
 		}
 
 		let status: CanvasConnectionData['status'];
-		if (nodeExecutionRunningById.value[connection.source] && runDataTotal === 0) {
+		if (nodeExecutionRunningById.value[sourceNodeId] && runDataTotal === 0) {
 			status = 'running';
 		} else if (
-			nodePinnedDataById.value[connection.source] &&
-			nodeExecutionRunDataById.value[connection.source]
+			nodePinnedDataById.value[sourceNodeId] &&
+			nodeExecutionRunDataById.value[sourceNodeId]
 		) {
 			status = 'pinned';
-		} else if (nodeHasIssuesById.value[connection.source]) {
+		} else if (nodeHasIssuesById.value[sourceNodeId]) {
 			status = 'error';
 		} else if (runDataTotal > 0 && lastSourceTask?.executionStatus !== 'canceled') {
 			// For non-main connections (model, memory, tool, etc.), only mark as executed
 			// if the target node also executed, since these are passive connections
 			const isMainConnection = type === NodeConnectionTypes.Main;
-			const targetNodeHasAnyExecution = nodeExecutionRunDataById.value[connection.target];
+			const targetNodeHasAnyExecution = nodeExecutionRunDataById.value[targetNodeId];
 
 			if (isMainConnection || targetNodeHasAnyExecution) {
 				status = 'success';
 			}
 		}
 
-		const sourceInputs = renderData.value.nodeInputsByNodeId.get(connection.source)?.value ?? [];
-		const targetInputs = renderData.value.nodeInputsByNodeId.get(connection.target)?.value ?? [];
+		const sourceInputs = renderData.value.nodeInputsByNodeId.get(sourceNodeId)?.value ?? [];
+		const targetInputs = renderData.value.nodeInputsByNodeId.get(targetNodeId)?.value ?? [];
 		const maxConnections = [...sourceInputs, ...targetInputs]
 			.filter((port) => port.type === type)
 			.reduce<number | undefined>((acc, port) => {
