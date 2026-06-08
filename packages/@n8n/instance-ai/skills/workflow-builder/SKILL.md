@@ -133,6 +133,15 @@ tokens, Slack channel IDs, Telegram chat IDs, or sample recipient lists. After
 the build, `workflows(action="setup")` opens an inline setup card in the AI
 Assistant panel so the user can fill placeholder values.
 
+Do not replace concrete user-provided or discoverable values with placeholders.
+If the prompt gives a real URL, channel name, table name, label, folder,
+database, or other literal selector, keep that value and only use a placeholder
+for the unknown part. A provider-side lookup failure does not make an explicit
+value ambiguous.
+For resource-locator fields, preserve explicit names as names. For example,
+`#daily-digest` should stay a channel name value, not become an empty id-mode
+locator. Use an empty id-mode locator only when the user did not name the target.
+
 ## Mandatory Process
 
 1. Research. If the workflow fits a known category, call
@@ -160,11 +169,13 @@ Assistant panel so the user can fill placeholder values.
    For planned build follow-ups where `buildTask.isSupportingWorkflow === true`,
    pass `isSupportingWorkflow: true`; that saved supporting workflow is the
    task's final deliverable.
-7. Trace wiring before declaring done. For IF, Switch, Merge, AI-agent, loop, or
-   multi-workflow wiring, trace each branch from source to target. Confirm IF
-   outputs use `.onTrue()` and `.onFalse()`, Switch outputs use zero-based
-   `.onCase(index, target)`, Merge modes match the data shape, and sub-nodes are
-   attached to the correct parent.
+7. Trace data and wiring before declaring done. For IF, Switch, Merge,
+   AI-agent, loop, or multi-workflow wiring, trace each branch from source to
+   target. Confirm IF outputs use `.onTrue()` and `.onFalse()`, Switch outputs
+   use zero-based `.onCase(index, target)`, Merge modes match the data shape,
+   single-output nodes are not wired through invented output ports, sub-nodes
+   are attached to the correct parent, and every required final effect has a
+   downstream action node.
 8. Fix errors. If `build-workflow` returns errors, repair with targeted patches
    when possible, or resubmit full SDK code for larger changes. Save again before
    any verification step.
@@ -345,6 +356,9 @@ When building workflows that create or use tables, use the data table skill
 guidance already loaded by the orchestrator when available. Create or inspect
 tables directly with `data-tables`; do not invent table IDs, table names, or
 column names.
+If the requested table must be populated and the columns do not already exist,
+create or define the table/schema before the workflow tries to upsert. Do not
+configure an upsert against a table name whose match columns were never created.
 
 ## SDK Code Rules
 
@@ -374,6 +388,23 @@ column names.
   later referenced by `$json` expressions, including optional trigger fields
   used in filters (for example Slack `subtype`, `bot_id`, `text`, `user`, `ts`,
   `channel`). Missing optional fields make expression-path validation fail.
+- Prefer built-in nodes for simple split, map, filter, merge, and aggregate
+  work. Use a Code node only when the transformation is not covered by node
+  parameters or common utility nodes.
+- When a Code node is necessary, use the real n8n item APIs. There is no
+  implicit `item` variable unless you declare it in a loop. For all-items
+  transforms, use `const items = $input.all()` and return `items.map((item) => ({
+  json: { ...item.json, ...derived } }))`. Keep one output item per source item
+  unless you are intentionally aggregating.
+- Code nodes run in a restricted runtime. Do not `require()` or `import`
+  unavailable modules such as `luxon` or `openai`; use JavaScript `Date`, `Intl`,
+  `$now`, `$today`, data already present in the workflow, or dedicated AI nodes.
+- Do not call LLM APIs from a Code node. For summarization, extraction, routing,
+  or chat behavior, use AI/LangChain nodes and wire their output fields
+  explicitly.
+- For embedded Code node source in `build-workflow`, do not use `String.raw`.
+  Prefer simple strings, arrays of lines joined with `String.fromCharCode(10)`,
+  and avoid nested template literals or escape-heavy regex/newline literals.
 
 Use this import shape unless the task needs fewer symbols:
 
@@ -416,7 +447,9 @@ Follow these rules strictly when generating workflows:
 2. Trust empty item lists. When a query returns zero items, downstream nodes
    simply do not run. Do not add `alwaysOutputData: true` just to keep a chain
    alive, and do not add an IF gate before a loop only to check whether items
-   exist.
+   exist. If the user asks for a no-results notification, count, digest, or
+   fallback, build that summary from the pre-filter source before the item stream
+   collapses to zero.
 3. Use `executeOnce: true` for a node that receives many items but should run
    once, such as a summary notification, report generation, shared-context
    fetch, or API call that does not vary per input item. Duplicate
@@ -434,7 +467,58 @@ Follow these rules strictly when generating workflows:
      effect. If the user asks to archive, update, delete, send, or create only
      matching items, wire the corresponding action node on the matching path.
 5. Input and output indices are zero-based. `.input(0)` and `.output(0)` are the
-   first input and output. `.input(1)` is the second input, not the first.
+   first input and output. `.input(1)` is the second input, not the first. Use
+   `.output(n)` only when the source node really has multiple outputs. Webhook,
+   Schedule, Manual Trigger, HTTP Request, Code, Set/Edit Fields, and most
+   action nodes have one main success output; do not use `.output(1)` or
+   `.output(2)` to make parallel branches from them.
+6. Preserve the normalized source item until all decisions and required effects
+   that need it are complete. Nodes such as Google Sheets, Airtable, HubSpot,
+   Data Tables, Slack, Gmail, and HTTP actions often replace the current item
+   JSON with their API response. Do not route a later IF, Switch, upsert, alert,
+   or message through a setup/logging/action node if it still needs the original
+   fields. Fan out from the trigger or normalized item, or use
+   `$('Source').item.json...` / `nodeJson(sourceNode, 'field')` for the source.
+7. Gate only what the condition controls. If logging must happen for every
+   weather reading, lead, issue, or form submission, wire the logging path before
+   the IF/Switch or from a parallel fan-out. The temperature, validity, priority,
+   or routing branch should gate only the alert/action that depends on that
+   condition.
+8. Keep independent effects independent. When several effects should happen for
+   the same source item, fan them out from the source instead of chaining them
+   only for convenience. For a single-output source, fan-out means multiple
+   `.add(source.to(action))` connections from output 0, not additional output
+   indices. If one effect may fail without blocking the others, check the node
+   definition for supported continue/error-output behavior and add an explicit
+   recovery branch only when the node supports it.
+9. Fetch field-complete external data before depending on it. If downstream
+   logic uses labels, team memberships, related records, pagination fields, or
+   nested properties, make sure the upstream node or query requests those fields.
+   If the native node cannot fetch the needed shape, use HTTP Request or another
+   API-capable node.
+10. Preserve list itemization. HTTP and app nodes may return one item per record,
+    a top-level array, or an envelope such as `records`, `body`, or `data`.
+    Before mapping, upserting, filtering, or posting per record, split arrays
+    into one item per record with built-in nodes when possible. Use Merge
+    append-style behavior for independent lists; do not use positional combine
+    when each input represents a separate record set.
+11. Aggregate only when the requested effect is one message or record. If the
+    user asks for one digest, summary, count, ranking, or report, aggregate the
+    filtered items first and send one final item. If an Aggregate node wraps
+    results under a `data` array, downstream nodes must read `$json.data` instead
+    of treating the wrapper as a single record. Wording like "include how many",
+    "count", "digest", "summary", "ranking", or "list the titles" means the
+    notification should be one aggregated message, not one message per item. If
+    the user asks for one action per item, keep the stream itemized.
+    When the prompt asks for a ranking, leaderboard, top list, or "sorted by
+    count", compute one row per ranked entity, then sort by the requested score
+    or count before formatting. Do not rely on input order or alphabetical team
+    order when the requirement is score/count order.
+12. Empty-case logic must be reachable when there are zero matching items. A Code
+    or formatting node placed only after a Filter/IF true branch will not execute
+    if that branch receives 0 items. For required no-results behavior, branch or
+    aggregate before dropping the stream to zero, or build a separate fallback
+    path from the pre-filter source.
 
 ## Tool Naming Rules
 
@@ -462,6 +546,30 @@ Follow these rules strictly when generating workflows:
 - Gmail archive: the message resource has no `archive` operation. To archive a
   Gmail message, remove the `INBOX` label with `operation: 'removeLabels'` and
   `labelIds: ['INBOX']`; do not add an invented `ARCHIVE` label.
+- For binary file parameters such as Slack file upload `binaryPropertyName`, use
+  the literal binary property key, for example `image`, `data`, or `audio`. Do
+  not set it to `={{ $binary.image }}`; that passes the binary object instead of
+  the property name.
+- For Webhook payload expressions, use the exact field names from the payload.
+  If the body uses `level`, read `$json.body.level`; do not rename it to
+  `$json.body.urgency` unless an earlier node created that field.
+- Do not use `$env` in workflow node expressions or URLs. Workflow executions may
+  deny environment-variable access. For tenant-specific IDs, project IDs, URLs,
+  or recipients that are not discoverable, use `placeholder(...)` or a setup
+  value instead.
+- For HTTP Request `jsonBody`, avoid raw object-literal expressions that splice
+  values like dates directly into JavaScript syntax. Prefer
+  `jsonBody: expr('{{ JSON.stringify({ query: "...", variables: { startDate:
+  $json.startDate } }) }}')` or key/value body parameters from the node
+  definition.
+- For resource mapper parameters such as Google Sheets `columns`, when using
+  `mappingMode: 'defineBelow'`, include both `value` and the matching
+  `schema` entries required by the node definition. If you cannot determine the
+  schema, prefer an auto-map mode only when the incoming field names already
+  match the destination.
+- If the request specifically calls for an MCP registry tool or the seeded MCP
+  registry, use the registry node/tool type from discovery. Do not substitute a
+  native app node with a similar service name.
 
 ## Expression Reference
 
@@ -498,6 +606,9 @@ per-item upstream values. Do not use `.first()` or `$input.first()` for
 per-item data in a multi-item workflow; it always reads item 0 and makes every
 downstream item reuse the first value. Use `.first()` only for a true global
 first item, such as a single configuration row.
+Use the exact displayed node name in `$()` references. Do not invent camelCase
+aliases for node names; `$('Telegram Trigger')` and `$('telegramTrigger')` are
+different references.
 
 ## SDK Patterns Reference
 
@@ -572,6 +683,13 @@ For AI Agent workflows:
 
 - Attach language models, memory, tools, parsers, retrievers, vector stores, and
   other subnodes to the agent as subnodes.
+- When the prompt should come from an event field such as Telegram
+  `message.text`, Webhook `body.message`, or Chat Trigger `chatInput`, set the
+  agent to use an explicitly defined prompt and map that field in `text`.
+- After an AI Agent node, `$json` is the agent output, not the original trigger
+  event. Reply/send nodes that need Telegram `chat.id`, webhook request fields,
+  or other source metadata must reference the trigger/source node explicitly
+  with `nodeJson(...)` or `$('Exact Node Name').item.json...`.
 - Tool nodes must have explicit concise `config.name` values.
 - Prefer `fromAi(...)` for values the agent should supply to tools.
 - Use explicit node references instead of `$json` in subnodes when the value

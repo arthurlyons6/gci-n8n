@@ -84,18 +84,37 @@ with direct `data-tables` and `parse-file` calls.
 - Each `title` should be short and user-facing.
 - Each `spec` must be the complete executor briefing for that task. The task
   executor may not see your broader planning notes.
-- For `build-workflow` tasks, describe outcomes, key behaviours, integrations,
-  data-table requirements, schedules in the user's timezone, setup expectations,
-  credential assumptions, and verification-relevant trigger/input details. Do
-  not write node-by-node wiring or fake user data.
+- For `build-workflow` tasks, make `spec` a structured executor briefing, not
+  freeform prose. Include these labels in this order:
+  `Outcome`, `Trigger mode`, `External systems`, `Required effects`,
+  `Required branches`, `Required data`, `Explicit constraints`,
+  `Empty/invalid behavior`, and `Done when`.
+- In `Required effects`, list every observable action the user asked for, such
+  as send email, send Telegram, write Google Sheets, create Notion pages, upsert
+  Data Table rows, or post one Slack summary.
+- In `Required branches`, state partial-failure behavior when multiple effects
+  start from the same trigger, and state whether no-results or invalid-input
+  paths need an explicit notification, fallback, log, or no-op.
+- In `Required data`, name fields needed by later conditions, filters, ranking,
+  response messages, or downstream effects, and note when those fields must
+  remain available after side-effect nodes that replace item JSON.
+- In `Explicit constraints`, preserve concrete user-provided resource names,
+  channels, tables, labels, URLs, and required node families. Do not move those
+  values to assumptions or replace them with placeholders.
+- In `Done when`, write observable acceptance checks, including final actions
+  and branch behavior. Do not write node-by-node wiring or fake user data.
 - If a `build-workflow` task's final deliverable is a supporting sub-workflow,
   set `isSupportingWorkflow: true` on that task. Do not set it for helper
   sub-workflows that are only intermediate artifacts inside a larger main
   workflow task.
 - For `delegate` tasks, include all context the background task needs and list
   only the tools it should use.
-- For `checkpoint` tasks, write the semantic validation goal, the exact
-  evidence to inspect, and a plain pass/fail condition.
+- For `checkpoint` tasks, write structured semantic verification instructions:
+  `Verify trigger mode`, `Verify external systems`, `Verify required effects`,
+  `Verify required branches`, `Verify required data`,
+  `Verify explicit constraints`, `Verify empty/invalid behavior`, and
+  `Pass condition`. Checkpoints are exceptional; use this structure only when a
+  checkpoint is actually warranted.
 
 ## Assumptions And Questions
 

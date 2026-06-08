@@ -110,6 +110,8 @@ interface ThreadStatus {
 export class N8nClient {
 	private sessionCookie?: string;
 
+	private personalProjectId?: string;
+
 	constructor(private readonly baseUrl: string) {}
 
 	// -- Auth ----------------------------------------------------------------
@@ -137,12 +139,13 @@ export class N8nClient {
 
 	/**
 	 * Ensure a conversation thread exists before sending chat messages.
-	 * POST /rest/instance-ai/threads body: { threadId }
+	 * POST /rest/instance-ai/threads body: { threadId, projectId }
 	 */
 	async ensureThread(threadId: string): Promise<void> {
+		const projectId = await this.getPersonalProjectId();
 		await this.fetch('/rest/instance-ai/threads', {
 			method: 'POST',
-			body: { threadId },
+			body: { threadId, projectId },
 		});
 	}
 
@@ -463,13 +466,16 @@ export class N8nClient {
 	 * GET /rest/projects/personal
 	 */
 	async getPersonalProjectId(): Promise<string> {
+		if (this.personalProjectId) return this.personalProjectId;
+
 		const result = (await this.fetch('/rest/projects/personal')) as {
 			data: { id: string };
 		};
 		if (!result.data?.id) {
 			throw new Error('Could not determine personal project ID');
 		}
-		return result.data.id;
+		this.personalProjectId = result.data.id;
+		return this.personalProjectId;
 	}
 
 	/**
