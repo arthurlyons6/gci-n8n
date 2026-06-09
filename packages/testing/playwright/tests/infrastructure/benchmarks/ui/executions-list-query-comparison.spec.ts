@@ -444,6 +444,11 @@ test.describe(
 				`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${sqlInCount}`,
 			);
 
+			// ── Create HTTP API context before SQL loops (DB is healthy here) ──
+			// Must be done before the SQL cold-cache loops that restart Postgres;
+			// login would fail if called after a restart with no wait.
+			const adminApi = await n8n.api.createApiForUser(ctx.admin);
+
 			// ── Cold-cache measurement ────────────────────────────────────────
 			const getManyExistsLat: number[] = [];
 			const getManyInLat: number[] = [];
@@ -491,7 +496,7 @@ test.describe(
 			// ── HTTP E2E — project:admin hits GET /rest/executions (cold cache) ──
 			// Postgres restarted before every iteration — same cold-cache condition
 			// as the SQL measurements above. Measures V2 (fix, current code).
-			const adminApi = await n8n.api.createApiForUser(ctx.admin);
+			// adminApi was created before the SQL loops while DB was healthy.
 			const httpLat: number[] = [];
 			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions (cold cache)`);
 			for (let i = 0; i < ITERATIONS; i++) {
