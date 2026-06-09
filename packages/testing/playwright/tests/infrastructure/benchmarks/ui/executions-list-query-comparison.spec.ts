@@ -506,11 +506,13 @@ test.describe(
 			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions (cold cache)`);
 			for (let i = 0; i < ITERATIONS; i++) {
 				await services.postgres.restart();
-				// Wait for n8n to reconnect to Postgres (max 30s)
+				// Wait for n8n to reconnect to Postgres (max 30s).
+				// /healthz is a liveness probe and returns 200 even when DB is not
+				// ready. Poll the actual endpoint until it returns non-503.
 				let ready = false;
 				for (let attempt = 0; attempt < 60 && !ready; attempt++) {
-					const health = await adminApi.request.get('/healthz');
-					if (health.ok()) {
+					const probe = await adminApi.request.get('/rest/executions?limit=1&includeData=false');
+					if (probe.status() !== 503) {
 						ready = true;
 					} else {
 						await new Promise((r) => setTimeout(r, 500));
