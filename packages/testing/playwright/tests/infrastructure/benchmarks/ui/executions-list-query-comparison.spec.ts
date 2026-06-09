@@ -10,6 +10,12 @@
  * (unlike Mac Docker Desktop where the VM retains the OS page cache).
  * This gives reliable cold-cache numbers that match production first-open latency.
  *
+ * Three query shapes are measured:
+ *   1. getMany EXISTS  — LIMIT 10, index scan exits early (both variants equally fast)
+ *   2. getMany IN      — same, for comparison
+ *   3. COUNT EXISTS    — no LIMIT, must scan all rows: the real bottleneck
+ *   4. COUNT IN        — same with the fix: hash semi-join, O(1)
+ *
  * Outputs a markdown report suitable for pasting into the Linear ticket.
  */
 import { setupAdminViewsExecutionsList } from '../../../../composables/journeys/admin-views-executions-list';
@@ -48,67 +54,105 @@ async function inflateProjectWorkflows(
 	}
 }
 
-function stats(latencies: number[]) {
+function calcStats(latencies: number[]) {
 	const sorted = [...latencies].sort((a, b) => a - b);
 	const avg = latencies.reduce((s, v) => s + v, 0) / latencies.length;
-	const p50 = sorted[Math.floor(sorted.length * 0.5)]!;
-	const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
-	const min = sorted[0]!;
-	const max = sorted[sorted.length - 1]!;
-	return { avg, p50, p95, min, max };
+	return {
+		avg,
+		p50: sorted[Math.floor(sorted.length * 0.5)]!,
+		p95: sorted[Math.floor(sorted.length * 0.95)]!,
+		min: sorted[0]!,
+		max: sorted[sorted.length - 1]!,
+	};
 }
 
 function fmt(n: number) {
 	return n.toFixed(1) + ' ms';
 }
 
+function summaryTable(
+	existsS: ReturnType<typeof calcStats>,
+	inS: ReturnType<typeof calcStats>,
+): string {
+	const delta = (e: number, i: number) =>
+		e > 0 ? `**${((1 - i / e) * 100).toFixed(0)}% faster**` : '—';
+	return `| Metric | EXISTS (before) | IN (after) | Δ |
+|--------|----------------|------------|---|
+| avg    | ${fmt(existsS.avg)} | ${fmt(inS.avg)} | ${delta(existsS.avg, inS.avg)} |
+| p50    | ${fmt(existsS.p50)} | ${fmt(inS.p50)} | ${delta(existsS.p50, inS.p50)} |
+| p95    | ${fmt(existsS.p95)} | ${fmt(inS.p95)} | ${delta(existsS.p95, inS.p95)} |
+| max    | ${fmt(existsS.max)} | ${fmt(inS.max)} | ${delta(existsS.max, inS.max)} |`;
+}
+
+function perIterationTable(existsLatencies: number[], inLatencies: number[]): string {
+	return existsLatencies
+		.map((e, i) => `| ${i + 1} | ${e.toFixed(1)} ms | ${inLatencies[i]!.toFixed(1)} ms |`)
+		.join('\n');
+}
+
 function renderMarkdown(
-	existsStats: ReturnType<typeof stats>,
-	inStats: ReturnType<typeof stats>,
-	existsLatencies: number[],
-	inLatencies: number[],
+	getManyExists: number[],
+	getManyIn: number[],
+	countExists: number[],
+	countIn: number[],
 	setup: { workflows: number; executions: number; iterations: number },
 ): string {
-	const avgImprovement = ((existsStats.avg - inStats.avg) / existsStats.avg) * 100;
-	const p95improvement = ((existsStats.p95 - inStats.p95) / existsStats.p95) * 100;
-	const maxImprovement = ((existsStats.max - inStats.max) / existsStats.max) * 100;
-
-	const rows = Array.from({ length: setup.iterations }, (_, i) => {
-		const e = existsLatencies[i]!.toFixed(1);
-		const n = inLatencies[i]!.toFixed(1);
-		return `| ${i + 1} | ${e} ms | ${n} ms |`;
-	}).join('\n');
+	const gme = calcStats(getManyExists);
+	const gmi = calcStats(getManyIn);
+	const ce = calcStats(countExists);
+	const ci = calcStats(countIn);
 
 	return `
-## Benchmark: \`executions getMany\` — EXISTS vs IN (cold cache, ${setup.iterations} iterations)
+## Benchmark: EXISTS vs IN access-control filter (cold cache, ${setup.iterations} iterations)
 
-**Setup:** ${setup.workflows} workflows · ${setup.executions.toLocaleString()} executions · project:admin scope · **global view (no projectId filter)**
-**Method:** Postgres container restarted before every iteration — flushes shared_buffers completely (Linux CI only, reproduces cold first-open latency)
+**Setup:** ${setup.workflows} workflows · ${setup.executions.toLocaleString()} executions · project:admin scope · global view
+**Method:** Postgres container restarted before every iteration (flushes shared_buffers — Linux CI cold-cache)
 
-### Summary
+---
 
-| Metric | EXISTS (before) | IN (after) | Δ |
-|--------|----------------|------------|---|
-| avg    | ${fmt(existsStats.avg)} | ${fmt(inStats.avg)} | **${avgImprovement.toFixed(0)}% faster** |
-| p50    | ${fmt(existsStats.p50)} | ${fmt(inStats.p50)} | ${(((existsStats.p50 - inStats.p50) / existsStats.p50) * 100).toFixed(0)}% faster |
-| p95    | ${fmt(existsStats.p95)} | ${fmt(inStats.p95)} | **${p95improvement.toFixed(0)}% faster** |
-| max    | ${fmt(existsStats.max)} | ${fmt(inStats.max)} | **${maxImprovement.toFixed(0)}% faster** |
+### Query 1 — getMany (LIMIT 10, ORDER BY id DESC)
 
-### Per-iteration latencies (cold cache)
+Mirrors \`findManyByRangeQuery()\`. Postgres uses a B-tree index scan and exits after
+the first 10 matching rows — EXISTS and IN are equally fast here because Postgres
+never evaluates the filter against all rows.
+
+${summaryTable(gme, gmi)}
+
+<details><summary>Per-iteration latencies</summary>
 
 | # | EXISTS | IN |
 |---|--------|----|
-${rows}
+${perIterationTable(getManyExists, getManyIn)}
+</details>
+
+---
+
+### Query 3 — COUNT(*) — no LIMIT (**the real bottleneck**)
+
+Mirrors \`getExecutionsCountForQuery()\` which fires alongside every getMany call.
+No LIMIT means Postgres must evaluate the access-control filter for **every row**.
+EXISTS re-evaluates the correlated subquery ${setup.executions.toLocaleString()} times.
+IN computes the accessible-workflow set once and uses a hash semi-join.
+
+${summaryTable(ce, ci)}
+
+<details><summary>Per-iteration latencies</summary>
+
+| # | EXISTS COUNT | IN COUNT |
+|---|-------------|---------|
+${perIterationTable(countExists, countIn)}
+</details>
+
+---
 
 ### Fix
 
 \`packages/@n8n/db/src/repositories/execution.repository.ts\`
 
 \`\`\`diff
-- // Correlated subquery — Postgres re-evaluates for every row in execution_entity
 - subquery.andWhere('"sw"."workflowId" = execution."workflowId"');
 - qb.where(\`EXISTS (\${subquery.getQuery()})\`);
-+ // Non-correlated IN subquery — Postgres computes accessible workflow IDs once
++ // Non-correlated IN — Postgres evaluates once, hash semi-join
 + qb.where(\`execution."workflowId" IN (\${subquery.getQuery()})\`);
 \`\`\`
 `.trim();
@@ -124,11 +168,11 @@ test.describe(
 		],
 	},
 	() => {
-		test(`EXISTS vs IN | ${ITERATIONS} cold-cache iterations each | ${WORKFLOWS_IN_PROJECT} wf | ${PRESEEDED_EXECUTIONS.toLocaleString()} execs | global view`, async ({
+		test(`EXISTS vs IN | ${ITERATIONS} cold-cache iterations | ${WORKFLOWS_IN_PROJECT} wf | ${PRESEEDED_EXECUTIONS.toLocaleString()} execs | getMany + COUNT`, async ({
 			services,
 			n8n,
 		}, testInfo) => {
-			// 50 iterations × ~10 s per Postgres restart + ~5 min seeding ≈ 15-20 min total.
+			// 4 × 50 iterations × ~10 s per restart + ~5 min seeding ≈ 40 min total.
 			testInfo.setTimeout(90 * 60 * 1000);
 
 			// ── Setup ────────────────────────────────────────────────────────
@@ -144,26 +188,15 @@ test.describe(
 				count: PRESEEDED_EXECUTIONS,
 			});
 
-			// Resolve admin user ID needed in the WHERE clause
 			const adminIdRaw = await services.postgres.exec(
 				`SELECT id FROM "user" WHERE email = '${ctx.admin.email}' LIMIT 1;`,
 			);
 			const adminId = adminIdRaw.trim();
 
-			// ── SQL variants ─────────────────────────────────────────────────
+			// ── SQL variants ──────────────────────────────────────────────────
+			// Roles mirror isSharingEnabled() === true (enterprise, as at CrowdStrike).
 			const workflowRoles = `'workflow:owner','workflow:editor'`;
 			const projectRoles = `'project:admin','project:editor','project:viewer'`;
-
-			// ── SQL variants ─────────────────────────────────────────────────────
-			// Both variants mirror toQueryBuilder() for a project:admin user on
-			// the GLOBAL executions view (no projectId filter in the outer query).
-			//
-			// The global view is the worst case: EXISTS must evaluate once per row
-			// across ALL 1 M execution_entity rows. projectId-scoped views are
-			// faster because Postgres can use the projectId index first.
-			//
-			// Roles mirror isSharingEnabled() === true (the path taken when the
-			// enterprise sharing feature is licensed — as at CrowdStrike).
 
 			// Access-control subquery — correlated (EXISTS, BEFORE fix)
 			const accessSubqueryExists = `
@@ -188,7 +221,7 @@ test.describe(
 					  AND pr.role IN (${projectRoles})
 				`;
 
-			// Outer wrapper mirrors toQueryBuilderWithAnnotations (annotation left-joins).
+			// Outer wrapper mirrors toQueryBuilderWithAnnotations.
 			const wrap = (inner: string) => `
 					SELECT e.*, ate.id AS annotation_tags_id, ate.name AS annotation_tags_name
 					FROM (${inner}) e
@@ -197,8 +230,8 @@ test.describe(
 					ORDER BY e.id DESC;
 				`;
 
-			// No projectId filter — global executions view, the worst case.
-			const innerExists = `
+			// ── Query 1 & 2: getMany (LIMIT 10) ──────────────────────────────
+			const sqlExistsGetMany = wrap(`
 					SELECT execution.id, execution."workflowId", execution.mode,
 					       execution.status, execution."createdAt", execution."startedAt",
 					       execution."stoppedAt", execution."retryOf", execution."retrySuccessId",
@@ -208,9 +241,9 @@ test.describe(
 					WHERE EXISTS (${accessSubqueryExists})
 					ORDER BY execution.id DESC
 					LIMIT 10
-				`;
+				`);
 
-			const innerIn = `
+			const sqlInGetMany = wrap(`
 					SELECT execution.id, execution."workflowId", execution.mode,
 					       execution.status, execution."createdAt", execution."startedAt",
 					       execution."stoppedAt", execution."retryOf", execution."retrySuccessId",
@@ -220,38 +253,69 @@ test.describe(
 					WHERE execution."workflowId" IN (${accessSubqueryIn})
 					ORDER BY execution.id DESC
 					LIMIT 10
+				`);
+
+			// ── Query 3 & 4: COUNT(*) — no LIMIT, the real bottleneck ─────────
+			const sqlExistsCount = `
+					SELECT COUNT(*)
+					FROM execution_entity execution
+					INNER JOIN workflow_entity workflow ON workflow.id = execution."workflowId"
+					WHERE EXISTS (${accessSubqueryExists})
 				`;
 
-			const sqlExists = wrap(innerExists);
-			const sqlIn = wrap(innerIn);
+			const sqlInCount = `
+					SELECT COUNT(*)
+					FROM execution_entity execution
+					INNER JOIN workflow_entity workflow ON workflow.id = execution."workflowId"
+					WHERE execution."workflowId" IN (${accessSubqueryIn})
+				`;
 
 			// ── Cold-cache measurement ────────────────────────────────────────
-			const existsLatencies: number[] = [];
-			const inLatencies: number[] = [];
+			const getManyExistsLat: number[] = [];
+			const getManyInLat: number[] = [];
+			const countExistsLat: number[] = [];
+			const countInLat: number[] = [];
 
-			console.log(`[MEASURE] ${ITERATIONS} cold-cache iterations — EXISTS variant`);
+			console.log(`[MEASURE] ${ITERATIONS} iterations — EXISTS getMany`);
 			for (let i = 0; i < ITERATIONS; i++) {
-				await services.postgres.restart(); // flush shared_buffers
+				await services.postgres.restart();
 				const t0 = performance.now();
-				await services.postgres.exec(sqlExists);
-				existsLatencies.push(performance.now() - t0);
-				console.log(`  [EXISTS ${i + 1}/${ITERATIONS}] ${existsLatencies[i]!.toFixed(1)} ms`);
+				await services.postgres.exec(sqlExistsGetMany);
+				getManyExistsLat.push(performance.now() - t0);
+				console.log(
+					`  [EXISTS getMany ${i + 1}/${ITERATIONS}] ${getManyExistsLat[i]!.toFixed(1)} ms`,
+				);
 			}
 
-			console.log(`[MEASURE] ${ITERATIONS} cold-cache iterations — IN variant`);
+			console.log(`[MEASURE] ${ITERATIONS} iterations — IN getMany`);
 			for (let i = 0; i < ITERATIONS; i++) {
-				await services.postgres.restart(); // flush shared_buffers
+				await services.postgres.restart();
 				const t0 = performance.now();
-				await services.postgres.exec(sqlIn);
-				inLatencies.push(performance.now() - t0);
-				console.log(`  [IN ${i + 1}/${ITERATIONS}] ${inLatencies[i]!.toFixed(1)} ms`);
+				await services.postgres.exec(sqlInGetMany);
+				getManyInLat.push(performance.now() - t0);
+				console.log(`  [IN getMany ${i + 1}/${ITERATIONS}] ${getManyInLat[i]!.toFixed(1)} ms`);
 			}
 
-			// ── Report ───────────────────────────────────────────────────────
-			const existsS = stats(existsLatencies);
-			const inS = stats(inLatencies);
+			console.log(`[MEASURE] ${ITERATIONS} iterations — EXISTS COUNT`);
+			for (let i = 0; i < ITERATIONS; i++) {
+				await services.postgres.restart();
+				const t0 = performance.now();
+				await services.postgres.exec(sqlExistsCount);
+				countExistsLat.push(performance.now() - t0);
+				console.log(`  [EXISTS COUNT ${i + 1}/${ITERATIONS}] ${countExistsLat[i]!.toFixed(1)} ms`);
+			}
 
-			const report = renderMarkdown(existsS, inS, existsLatencies, inLatencies, {
+			console.log(`[MEASURE] ${ITERATIONS} iterations — IN COUNT`);
+			for (let i = 0; i < ITERATIONS; i++) {
+				await services.postgres.restart();
+				const t0 = performance.now();
+				await services.postgres.exec(sqlInCount);
+				countInLat.push(performance.now() - t0);
+				console.log(`  [IN COUNT ${i + 1}/${ITERATIONS}] ${countInLat[i]!.toFixed(1)} ms`);
+			}
+
+			// ── Report ────────────────────────────────────────────────────────
+			const report = renderMarkdown(getManyExistsLat, getManyInLat, countExistsLat, countInLat, {
 				workflows: WORKFLOWS_IN_PROJECT,
 				executions: PRESEEDED_EXECUTIONS,
 				iterations: ITERATIONS,
