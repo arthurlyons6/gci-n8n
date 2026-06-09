@@ -498,13 +498,28 @@ test.describe(
 			}
 
 			// ── HTTP E2E — project:admin hits GET /rest/executions (cold cache) ──
-			// Postgres restarted before every iteration — same cold-cache condition
-			// as the SQL measurements above. Measures V2 (fix, current code).
-			// adminApi was created before the SQL loops while DB was healthy.
+			// Postgres restarted before every iteration — cold Postgres shared_buffers.
+			// After restart: poll /healthz until n8n reconnects (up to 30s), then
+			// measure the first real request. This isolates query latency from
+			// n8n reconnect time while still ensuring cold Postgres cache.
 			const httpLat: number[] = [];
 			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions (cold cache)`);
 			for (let i = 0; i < ITERATIONS; i++) {
 				await services.postgres.restart();
+				// Wait for n8n to reconnect to Postgres (max 30s)
+				let ready = false;
+				for (let attempt = 0; attempt < 60 && !ready; attempt++) {
+					const health = await adminApi.request.get('/healthz');
+					if (health.ok()) {
+						ready = true;
+					} else {
+						await new Promise((r) => setTimeout(r, 500));
+					}
+				}
+				if (!ready) {
+					console.warn(`  [HTTP ${i + 1}/${ITERATIONS}] n8n not ready after 30s — skipping`);
+					continue;
+				}
 				const t0 = performance.now();
 				const res = await adminApi.request.get('/rest/executions?limit=10&includeData=false');
 				httpLat.push(performance.now() - t0);
