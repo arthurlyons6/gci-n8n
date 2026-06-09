@@ -16,6 +16,12 @@
  *   3. COUNT EXISTS    — no LIMIT, must scan all rows: the real bottleneck
  *   4. COUNT IN        — same with the fix: hash semi-join, O(1)
  *
+ * Report includes:
+ *   - Summary table with avg / p50 / p75 / p90 / p95 / p99 / max / stddev / CV
+ *   - Per-iteration raw latency table
+ *   - EXPLAIN ANALYZE query plans for both COUNT variants
+ *   - Delta column: % improvement IN vs EXISTS
+ *
  * Outputs a markdown report suitable for pasting into the Linear ticket.
  */
 import { setupAdminViewsExecutionsList } from '../../../../composables/journeys/admin-views-executions-list';
@@ -24,7 +30,7 @@ import { benchConfig } from '../../../../playwright-projects';
 import type { ApiHelpers } from '../../../../services/api-helper';
 import { bulkSeedExecutions } from '../harness/bulk-seed-executions';
 
-const ITERATIONS = 50;
+const ITERATIONS = 100;
 const WORKFLOWS_IN_PROJECT = 400;
 const PRESEEDED_EXECUTIONS = 1_000_000;
 const CREATE_BATCH_SIZE = 20;
@@ -54,34 +60,72 @@ async function inflateProjectWorkflows(
 	}
 }
 
+// ── Statistics ────────────────────────────────────────────────────────────────
+
 function calcStats(latencies: number[]) {
 	const sorted = [...latencies].sort((a, b) => a - b);
-	const avg = latencies.reduce((s, v) => s + v, 0) / latencies.length;
+	const n = latencies.length;
+	const avg = latencies.reduce((s, v) => s + v, 0) / n;
+	const variance = latencies.reduce((s, v) => s + (v - avg) ** 2, 0) / n;
+	const stddev = Math.sqrt(variance);
+	const pct = (p: number) => sorted[Math.min(Math.floor(n * p), n - 1)]!;
 	return {
 		avg,
-		p50: sorted[Math.floor(sorted.length * 0.5)]!,
-		p95: sorted[Math.floor(sorted.length * 0.95)]!,
+		stddev,
+		cv: stddev / avg, // coefficient of variation
+		p50: pct(0.5),
+		p75: pct(0.75),
+		p90: pct(0.9),
+		p95: pct(0.95),
+		p99: pct(0.99),
 		min: sorted[0]!,
-		max: sorted[sorted.length - 1]!,
+		max: sorted[n - 1]!,
 	};
+}
+
+/** Mann-Whitney U statistic: P(X < Y) — probability that EXISTS > IN */
+function mannWhitneyU(a: number[], b: number[]): { u: number; prob: number } {
+	let u = 0;
+	for (const x of a) for (const y of b) u += x > y ? 1 : x === y ? 0.5 : 0;
+	return { u, prob: u / (a.length * b.length) };
 }
 
 function fmt(n: number) {
 	return n.toFixed(1) + ' ms';
 }
+function fmtPct(n: number) {
+	return (n * 100).toFixed(1) + '%';
+}
+function delta(e: number, i: number): string {
+	if (e <= 0) return '—';
+	const pct = ((1 - i / e) * 100).toFixed(0);
+	return e > i ? `**${pct}% faster**` : `${Math.abs(Number(pct))}% slower`;
+}
+
+// ── Report builders ───────────────────────────────────────────────────────────
 
 function summaryTable(
 	existsS: ReturnType<typeof calcStats>,
 	inS: ReturnType<typeof calcStats>,
 ): string {
-	const delta = (e: number, i: number) =>
-		e > 0 ? `**${((1 - i / e) * 100).toFixed(0)}% faster**` : '—';
-	return `| Metric | Version 1 (actual master, EXISTS) | Version 2 (fix, IN) | Δ |
-|--------|----------------------------------|---------------------|---|
-| avg    | ${fmt(existsS.avg)} | ${fmt(inS.avg)} | ${delta(existsS.avg, inS.avg)} |
-| p50    | ${fmt(existsS.p50)} | ${fmt(inS.p50)} | ${delta(existsS.p50, inS.p50)} |
-| p95    | ${fmt(existsS.p95)} | ${fmt(inS.p95)} | ${delta(existsS.p95, inS.p95)} |
-| max    | ${fmt(existsS.max)} | ${fmt(inS.max)} | ${delta(existsS.max, inS.max)} |`;
+	const rows = [
+		['avg', existsS.avg, inS.avg],
+		['p50', existsS.p50, inS.p50],
+		['p75', existsS.p75, inS.p75],
+		['p90', existsS.p90, inS.p90],
+		['p95', existsS.p95, inS.p95],
+		['p99', existsS.p99, inS.p99],
+		['max', existsS.max, inS.max],
+		['min', existsS.min, inS.min],
+		['stddev', existsS.stddev, inS.stddev],
+	] as [string, number, number][];
+
+	const header = `| Metric | Version 1 (actual master, EXISTS) | Version 2 (fix, IN) | Δ |`;
+	const sep = `|--------|----------------------------------|---------------------|---|`;
+	const dataRows = rows.map(
+		([label, e, i]) => `| ${label}   | ${fmt(e)} | ${fmt(i)} | ${delta(e, i)} |`,
+	);
+	return [header, sep, ...dataRows].join('\n');
 }
 
 function perIterationTable(existsLatencies: number[], inLatencies: number[]): string {
@@ -90,12 +134,61 @@ function perIterationTable(existsLatencies: number[], inLatencies: number[]): st
 		.join('\n');
 }
 
+function allRunsSummaryTable(
+	getManyExists: number[],
+	getManyIn: number[],
+	countExists: number[],
+	countIn: number[],
+): string {
+	const gme = calcStats(getManyExists);
+	const gmi = calcStats(getManyIn);
+	const ce = calcStats(countExists);
+	const ci = calcStats(countIn);
+
+	const mwGetMany = mannWhitneyU(getManyExists, getManyIn);
+	const mwCount = mannWhitneyU(countExists, countIn);
+
+	const col = (s: ReturnType<typeof calcStats>, label: string) =>
+		`| ${label} | ${fmt(s.avg)} | ${fmt(s.p50)} | ${fmt(s.p75)} | ${fmt(s.p90)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.max)} | ${fmt(s.min)} | ${fmt(s.stddev)} | ${fmtPct(s.cv)} |`;
+
+	return `### All-runs summary
+
+| Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
+|---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
+${col(ce, 'COUNT EXISTS (V1)')}
+${col(ci, 'COUNT IN (V2)')}
+${col(gme, 'getMany EXISTS (V1)')}
+${col(gmi, 'getMany IN (V2)')}
+
+**Delta (V1 → V2):**
+
+| Metric | COUNT Δ | getMany Δ |
+|--------|---------|-----------|
+| avg    | ${delta(ce.avg, ci.avg)} | ${delta(gme.avg, gmi.avg)} |
+| p50    | ${delta(ce.p50, ci.p50)} | ${delta(gme.p50, gmi.p50)} |
+| p75    | ${delta(ce.p75, ci.p75)} | ${delta(gme.p75, gmi.p75)} |
+| p90    | ${delta(ce.p90, ci.p90)} | ${delta(gme.p90, gmi.p90)} |
+| p95    | ${delta(ce.p95, ci.p95)} | ${delta(gme.p95, gmi.p95)} |
+| p99    | ${delta(ce.p99, ci.p99)} | ${delta(gme.p99, gmi.p99)} |
+| max    | ${delta(ce.max, ci.max)} | ${delta(gme.max, gmi.max)} |
+| stddev | ${delta(ce.stddev, ci.stddev)} | ${delta(gme.stddev, gmi.stddev)} |
+
+**Mann-Whitney U (probability that EXISTS > IN):**
+
+| Query | U | P(EXISTS > IN) | Interpretation |
+|-------|---|----------------|----------------|
+| COUNT(*) | ${mwCount.u.toFixed(0)} | ${fmtPct(mwCount.prob)} | ${mwCount.prob > 0.6 ? '✅ IN is faster with statistical confidence' : mwCount.prob > 0.5 ? '⚠️ IN is slightly faster, marginal' : '❌ No significant difference'} |
+| getMany  | ${mwGetMany.u.toFixed(0)} | ${fmtPct(mwGetMany.prob)} | ${mwGetMany.prob > 0.6 ? '✅ IN is faster with statistical confidence' : mwGetMany.prob > 0.5 ? '⚠️ IN is slightly faster, marginal' : '❌ No significant difference'} |`;
+}
+
 function renderMarkdown(
 	getManyExists: number[],
 	getManyIn: number[],
 	countExists: number[],
 	countIn: number[],
 	setup: { workflows: number; executions: number; iterations: number },
+	explainExists: string,
+	explainIn: string,
 ): string {
 	const gme = calcStats(getManyExists);
 	const gmi = calcStats(getManyIn);
@@ -107,6 +200,10 @@ function renderMarkdown(
 
 **Setup:** ${setup.workflows} workflows · ${setup.executions.toLocaleString()} executions · project:admin scope · global view
 **Method:** Postgres container restarted before every iteration (flushes shared_buffers — Linux CI cold-cache)
+
+---
+
+${allRunsSummaryTable(getManyExists, getManyIn, countExists, countIn)}
 
 ---
 
@@ -145,6 +242,24 @@ ${perIterationTable(countExists, countIn)}
 
 ---
 
+### EXPLAIN ANALYZE — COUNT(*) query plans (single cold run each)
+
+<details><summary>Version 1 (actual master, EXISTS)</summary>
+
+\`\`\`
+${explainExists || 'not available'}
+\`\`\`
+</details>
+
+<details><summary>Version 2 (fix, IN)</summary>
+
+\`\`\`
+${explainIn || 'not available'}
+\`\`\`
+</details>
+
+---
+
 ### Fix
 
 \`packages/@n8n/db/src/repositories/execution.repository.ts\`
@@ -172,8 +287,8 @@ test.describe(
 			services,
 			n8n,
 		}, testInfo) => {
-			// 4 × 50 iterations × ~10 s per restart + ~5 min seeding ≈ 40 min total.
-			testInfo.setTimeout(90 * 60 * 1000);
+			// 4 × 100 iterations × ~10 s per restart + ~5 min seeding ≈ 75 min total.
+			testInfo.setTimeout(120 * 60 * 1000);
 
 			// ── Setup ────────────────────────────────────────────────────────
 			const ctx = await setupAdminViewsExecutionsList(n8n.api);
@@ -270,6 +385,16 @@ test.describe(
 					WHERE execution."workflowId" IN (${accessSubqueryIn})
 				`;
 
+			// ── EXPLAIN ANALYZE (single cold run each, before the timing loop) ──
+			await services.postgres.restart();
+			const explainExists = await services.postgres.exec(
+				`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${sqlExistsCount}`,
+			);
+			await services.postgres.restart();
+			const explainIn = await services.postgres.exec(
+				`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${sqlInCount}`,
+			);
+
 			// ── Cold-cache measurement ────────────────────────────────────────
 			const getManyExistsLat: number[] = [];
 			const getManyInLat: number[] = [];
@@ -315,11 +440,19 @@ test.describe(
 			}
 
 			// ── Report ────────────────────────────────────────────────────────
-			const report = renderMarkdown(getManyExistsLat, getManyInLat, countExistsLat, countInLat, {
-				workflows: WORKFLOWS_IN_PROJECT,
-				executions: PRESEEDED_EXECUTIONS,
-				iterations: ITERATIONS,
-			});
+			const report = renderMarkdown(
+				getManyExistsLat,
+				getManyInLat,
+				countExistsLat,
+				countInLat,
+				{
+					workflows: WORKFLOWS_IN_PROJECT,
+					executions: PRESEEDED_EXECUTIONS,
+					iterations: ITERATIONS,
+				},
+				explainExists,
+				explainIn,
+			);
 
 			console.log('\n' + report + '\n');
 
