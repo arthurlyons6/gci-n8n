@@ -4,13 +4,14 @@ import { NextFunction, Response, Request } from 'express';
 import { ensureError } from 'n8n-workflow';
 
 import { AuthError } from '@/errors/response-errors/auth.error';
+import { OAuthTokenService } from '@/modules/oauth-server/oauth-token.service';
+import type { TelemetryAuthContext, UserWithContext } from '@/modules/oauth-server/oauth.types';
 import { JwtService } from '@/services/jwt.service';
 import { Telemetry } from '@/telemetry';
 
 import { McpServerApiKeyService } from './mcp-api-key.service';
-import { McpOAuthTokenService } from './mcp-oauth-token.service';
+import { McpProtectedResource } from './mcp-protected-resource';
 import { USER_CONNECTED_TO_MCP_EVENT, UNAUTHORIZED_ERROR_MESSAGE } from './mcp.constants';
-import type { TelemetryAuthContext, UserWithContext } from './mcp.types';
 import { getClientInfo } from './mcp.utils';
 
 /**
@@ -22,7 +23,8 @@ import { getClientInfo } from './mcp.utils';
 export class McpServerMiddlewareService {
 	constructor(
 		private readonly mcpServerApiKeyService: McpServerApiKeyService,
-		private readonly mcpAuthTokenService: McpOAuthTokenService,
+		private readonly oauthTokenService: OAuthTokenService,
+		private readonly mcpProtectedResource: McpProtectedResource,
 		private readonly jwtService: JwtService,
 		private readonly telemetry: Telemetry,
 	) {}
@@ -47,8 +49,8 @@ export class McpServerMiddlewareService {
 		}
 
 		if (decoded?.meta?.isOAuth === true) {
-			const expectedAudience = this.mcpAuthTokenService.getCanonicalResourceUrl();
-			return await this.mcpAuthTokenService.verifyOAuthAccessToken(token, expectedAudience);
+			const expectedAudience = this.mcpProtectedResource.getResourceUrl();
+			return await this.oauthTokenService.verifyOAuthAccessToken(token, expectedAudience);
 		}
 
 		return await this.mcpServerApiKeyService.verifyApiKey(token);

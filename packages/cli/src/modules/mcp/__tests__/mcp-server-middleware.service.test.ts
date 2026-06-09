@@ -4,11 +4,12 @@ import type { Request, Response, NextFunction } from 'express';
 import { mock, mockDeep } from 'jest-mock-extended';
 import type { InstanceSettings } from 'n8n-core';
 
+import { OAuthTokenService } from '@/modules/oauth-server/oauth-token.service';
 import { JwtService } from '@/services/jwt.service';
 import { Telemetry } from '@/telemetry';
 
 import { McpServerApiKeyService } from '../mcp-api-key.service';
-import { McpOAuthTokenService } from '../mcp-oauth-token.service';
+import { McpProtectedResource } from '../mcp-protected-resource';
 import { McpServerMiddlewareService } from '../mcp-server-middleware.service';
 
 const mockReqWith = (authHeader: string | undefined, body?: any) => {
@@ -25,7 +26,8 @@ const instanceSettings = mock<InstanceSettings>({ encryptionKey: 'test-key' });
 const jwtService = new JwtService(instanceSettings, mock());
 
 let mcpServerApiKeyService: jest.Mocked<McpServerApiKeyService>;
-let oauthTokenService: jest.Mocked<McpOAuthTokenService>;
+let oauthTokenService: jest.Mocked<OAuthTokenService>;
+let mcpProtectedResource: jest.Mocked<McpProtectedResource>;
 let telemetry: jest.Mocked<Telemetry>;
 let service: McpServerMiddlewareService;
 
@@ -34,12 +36,14 @@ describe('McpServerMiddlewareService', () => {
 		mcpServerApiKeyService = mockInstance(
 			McpServerApiKeyService,
 		) as jest.Mocked<McpServerApiKeyService>;
-		oauthTokenService = mockInstance(McpOAuthTokenService) as jest.Mocked<McpOAuthTokenService>;
+		oauthTokenService = mockInstance(OAuthTokenService) as jest.Mocked<OAuthTokenService>;
+		mcpProtectedResource = mockInstance(McpProtectedResource) as jest.Mocked<McpProtectedResource>;
 		telemetry = mockInstance(Telemetry);
 
 		service = new McpServerMiddlewareService(
 			mcpServerApiKeyService,
 			oauthTokenService,
+			mcpProtectedResource,
 			jwtService,
 			telemetry,
 		);
@@ -47,9 +51,7 @@ describe('McpServerMiddlewareService', () => {
 
 	beforeEach(() => {
 		jest.clearAllMocks();
-		oauthTokenService.getCanonicalResourceUrl.mockReturnValue(
-			'https://n8n.example.com/mcp-server/http',
-		);
+		mcpProtectedResource.getResourceUrl.mockReturnValue('https://n8n.example.com/mcp-server/http');
 	});
 
 	describe('getUserForToken', () => {
