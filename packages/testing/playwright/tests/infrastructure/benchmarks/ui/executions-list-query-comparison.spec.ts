@@ -201,11 +201,35 @@ ${col(gmi, 'V2 (fix)')}
 Mann-Whitney U: ${mwGetMany.u.toFixed(0)} — P(V1 > V2) = ${fmtPct(mwGetMany.prob)} — ${mwInterp(mwGetMany.prob)}`;
 }
 
+function httpSummarySection(httpLat: number[], setup: { iterations: number }): string {
+	const hs = calcStats(httpLat);
+	const col = (s: ReturnType<typeof calcStats>) =>
+		`| V2 (fix, current code) | ${fmt(s.avg)} | ${fmt(s.p50)} | ${fmt(s.p75)} | ${fmt(s.p90)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.max)} | ${fmt(s.min)} | ${fmt(s.stddev)} | ${fmtPct(s.cv)} |`;
+
+	return `### HTTP E2E — GET /rest/executions (V2, fix applied, ${setup.iterations} iterations)
+
+Full stack: HTTP → Express → TypeORM → Postgres → JSON response.
+\`GET /rest/executions?limit=10\` calls \`findRangeWithCount()\` — runs both getMany + COUNT(*) per request.
+Auth: project:admin user (same scope as CrowdStrike scenario).
+
+| Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
+|---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
+${col(hs)}
+
+<details><summary>Per-iteration latencies</summary>
+
+| # | GET /rest/executions |
+|---|---------------------|
+${httpLat.map((ms, i) => `| ${i + 1} | ${ms.toFixed(1)} ms |`).join('\n')}
+</details>`;
+}
+
 function renderMarkdown(
 	getManyExists: number[],
 	getManyIn: number[],
 	countExists: number[],
 	countIn: number[],
+	httpLat: number[],
 	setup: { workflows: number; executions: number; iterations: number },
 	explainExists: string,
 	explainIn: string,
@@ -280,6 +304,10 @@ ${explainIn || 'not available'}
 
 ---
 
+${httpSummarySection(httpLat, setup)}
+
+---
+
 ### Fix
 
 \`packages/@n8n/db/src/repositories/execution.repository.ts\`
@@ -303,7 +331,7 @@ test.describe(
 		],
 	},
 	() => {
-		test(`EXISTS vs IN | ${ITERATIONS} cold-cache iterations | ${WORKFLOWS_IN_PROJECT} wf | ${PRESEEDED_EXECUTIONS.toLocaleString()} execs | getMany + COUNT`, async ({
+		test(`EXISTS vs IN | ${ITERATIONS} cold-cache iterations | ${WORKFLOWS_IN_PROJECT} wf | ${PRESEEDED_EXECUTIONS.toLocaleString()} execs | getMany + COUNT + HTTP E2E`, async ({
 			services,
 			n8n,
 		}, testInfo) => {
@@ -459,12 +487,31 @@ test.describe(
 				console.log(`  [IN COUNT ${i + 1}/${ITERATIONS}] ${countInLat[i]!.toFixed(1)} ms`);
 			}
 
+			// ── HTTP E2E — project:admin hits GET /rest/executions ────────────
+			// Uses the same user + scope as the CrowdStrike scenario.
+			// Measures V2 (fix) only — both SQL variants run against the same
+			// patched codebase; HTTP just confirms the full stack is responsive.
+			const adminApi = await n8n.api.createApiForUser(ctx.admin);
+			const httpLat: number[] = [];
+			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions`);
+			for (let i = 0; i < ITERATIONS; i++) {
+				const t0 = performance.now();
+				const res = await adminApi.request.get('/rest/executions?limit=10&includeData=false');
+				httpLat.push(performance.now() - t0);
+				if (!res.ok()) {
+					console.warn(`  [HTTP ${i + 1}/${ITERATIONS}] status=${res.status()}`);
+				} else {
+					console.log(`  [HTTP ${i + 1}/${ITERATIONS}] ${httpLat[i]!.toFixed(1)} ms`);
+				}
+			}
+
 			// ── Report ────────────────────────────────────────────────────────
 			const report = renderMarkdown(
 				getManyExistsLat,
 				getManyInLat,
 				countExistsLat,
 				countInLat,
+				httpLat,
 				{
 					workflows: WORKFLOWS_IN_PROJECT,
 					executions: PRESEEDED_EXECUTIONS,
