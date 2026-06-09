@@ -262,6 +262,8 @@ export class WorkflowHistoryService {
 			'versionId' | 'workflowId' | 'createdAt' | 'updatedAt'
 		>,
 	) {
+		// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+		// @ts-ignore TS2589: type depth regression from workflow-groups feature
 		await this.workflowHistoryRepository.update({ versionId, workflowId }, updateData);
 	}
 

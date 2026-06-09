@@ -945,13 +945,13 @@ export class ExecutionRepository extends Repository<ExecutionEntity> {
 			.innerJoin('execution.workflow', 'workflow');
 
 		if (user && sharingOptions) {
-			// EXISTS-based access control — correlated subquery for better query plans
+			// Non-correlated IN subquery — Postgres computes accessible workflow IDs once
+			// and uses a hash semi-join instead of re-evaluating a correlated subquery per row.
 			const subquery = this.sharedWorkflowRepository.buildSharedWorkflowIdsSubquery(
 				user,
 				sharingOptions,
 			);
-			subquery.andWhere('"sw"."workflowId" = execution."workflowId"');
-			qb.where(`EXISTS (${subquery.getQuery()})`);
+			qb.where(`execution."workflowId" IN (${subquery.getQuery()})`);
 			qb.setParameters(subquery.getParameters());
 		} else if (user && hasGlobalScope(user, 'workflow:read')) {
 			// Global-scope admin without sharingOptions — no access-control filter needed

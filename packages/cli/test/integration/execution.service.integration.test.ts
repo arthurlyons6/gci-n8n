@@ -9,6 +9,7 @@ import type { ExecutionSummaries, User } from '@n8n/db';
 import { ExecutionMetadataRepository, ExecutionRepository, WorkflowRepository } from '@n8n/db';
 import { Container } from '@n8n/di';
 import { mock } from 'jest-mock-extended';
+import { performance } from 'node:perf_hooks';
 
 import { ExecutionService } from '@/executions/execution.service';
 
@@ -1142,5 +1143,330 @@ describe('ExecutionService', () => {
 				},
 			]);
 		});
+	});
+
+	// ─────────────────────────────────────────────────────────────────────────
+	// IAM-680 regression: IN subquery (non-correlated) access-control filter
+	//
+	// Background: IAM-371 replaced the `IN (:...ids)` approach with an EXISTS
+	// correlated subquery to fix Postgres crashing with 382+ bind parameters.
+	// IAM-680 discovered that the correlated subquery re-evaluates once per row
+	// (1M evaluations at CrowdStrike scale), causing 2-3 s query times and high
+	// CPU. The fix converts EXISTS back to an IN *non-correlated* subquery —
+	// Postgres evaluates it once and uses a hash semi-join instead.
+	//
+	// These tests verify correctness of every access-control scenario so the
+	// fix cannot silently regress either the IAM-371 or IAM-680 behaviour.
+	// ─────────────────────────────────────────────────────────────────────────
+	describe('findRangeWithCount — IAM-680: IN subquery regression tests', () => {
+		// Sharing-enabled roles mirror the controller's isSharingEnabled() === true path.
+		const sharingEnabled = {
+			workflowRoles: ['workflow:owner', 'workflow:editor'],
+			projectRoles: ['project:personalOwner', 'project:admin', 'project:editor'],
+		};
+
+		// Personal-only roles (no sharing license).
+		const personalOnly = {
+			workflowRoles: ['workflow:owner'],
+			projectRoles: ['project:personalOwner'],
+		};
+
+		afterEach(async () => {
+			// Clean up executions, then shared_workflow (FK → workflow), then workflows.
+			// We deliberately do NOT truncate Project/ProjectRelation here to preserve
+			// the personal projects of `member` and `owner` that were seeded in beforeAll.
+			// Team projects accumulate across tests but are harmless — their workflows are
+			// deleted, so they contribute zero executions to subsequent tests.
+			await testDb.truncate(['ExecutionEntity']);
+			await testDb.truncate(['SharedWorkflow']);
+			await testDb.truncate(['WorkflowEntity']);
+		});
+
+		test('project:admin can see executions of all workflows in a team project', async () => {
+			// Replicates the CrowdStrike scenario: a user is project:admin of a team
+			// project and queries the executions list. With the EXISTS correlated
+			// subquery this produced 2-3 s latency at 1M executions; with IN it uses
+			// a hash semi-join and is O(1) relative to execution count.
+			const teamProject = await createTeamProject(undefined, member);
+			const wf1 = await createWorkflow({}, teamProject);
+			const wf2 = await createWorkflow({}, teamProject);
+			const otherProject = await createTeamProject();
+			const otherWf = await createWorkflow({}, otherProject);
+
+			await Promise.all([
+				createExecution({ status: 'success' }, wf1),
+				createExecution({ status: 'error' }, wf1),
+				createExecution({ status: 'success' }, wf2),
+				createExecution({ status: 'success' }, otherWf), // must NOT appear
+			]);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				user: member,
+				sharingOptions: sharingEnabled,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			expect(result.count).toBe(3);
+			const workflowIds = result.results.map((r) => r.workflowId);
+			expect(workflowIds).toContain(wf1.id);
+			expect(workflowIds).toContain(wf2.id);
+			expect(workflowIds).not.toContain(otherWf.id);
+		});
+
+		test('project:editor can see executions of workflows in team project', async () => {
+			const teamProject = await createTeamProject();
+			await linkUserToProject(member, teamProject, 'project:editor');
+			const teamWf = await createWorkflow({}, teamProject);
+			const otherWf = await createWorkflow({}, owner);
+
+			await Promise.all([
+				createExecution({ status: 'success' }, teamWf),
+				createExecution({ status: 'success' }, teamWf),
+				createExecution({ status: 'success' }, otherWf), // must NOT appear
+			]);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				user: member,
+				sharingOptions: sharingEnabled,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			// member is editor of teamProject only; personalOwner has no workflows → 2
+			expect(result.count).toBe(2);
+			const workflowIds = result.results.map((r) => r.workflowId);
+			expect(workflowIds).toContain(teamWf.id);
+			expect(workflowIds).not.toContain(otherWf.id);
+		});
+
+		test('user sees executions across personal project AND team project', async () => {
+			const teamProject = await createTeamProject(undefined, member);
+			const personalWf = await createWorkflow({}, member);
+			const teamWf = await createWorkflow({}, teamProject);
+			const inaccessibleWf = await createWorkflow({}, owner);
+
+			await Promise.all([
+				createExecution({ status: 'success' }, personalWf),
+				createExecution({ status: 'success' }, teamWf),
+				createExecution({ status: 'error' }, teamWf),
+				createExecution({ status: 'success' }, inaccessibleWf), // must NOT appear
+			]);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				user: member,
+				sharingOptions: sharingEnabled,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			expect(result.count).toBe(3);
+			const workflowIds = result.results.map((r) => r.workflowId);
+			expect(workflowIds).toContain(personalWf.id);
+			expect(workflowIds).toContain(teamWf.id);
+			expect(workflowIds).not.toContain(inaccessibleWf.id);
+		});
+
+		test('status filter works correctly with IN subquery access control', async () => {
+			const teamProject = await createTeamProject(undefined, member);
+			const wf = await createWorkflow({}, teamProject);
+
+			await Promise.all([
+				createExecution({ status: 'success' }, wf),
+				createExecution({ status: 'success' }, wf),
+				createExecution({ status: 'error' }, wf),
+			]);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				status: ['success'],
+				user: member,
+				sharingOptions: sharingEnabled,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			expect(result.count).toBe(2);
+			expect(result.results.every((r) => r.status === 'success')).toBe(true);
+		});
+
+		test('workflowId filter works correctly with IN subquery access control', async () => {
+			const teamProject = await createTeamProject(undefined, member);
+			const wf1 = await createWorkflow({}, teamProject);
+			const wf2 = await createWorkflow({}, teamProject);
+
+			await Promise.all([
+				createExecution({ status: 'success' }, wf1),
+				createExecution({ status: 'success' }, wf1),
+				createExecution({ status: 'success' }, wf2),
+			]);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				workflowId: wf1.id,
+				user: member,
+				sharingOptions: sharingEnabled,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			expect(result.count).toBe(2);
+			expect(result.results.every((r) => r.workflowId === wf1.id)).toBe(true);
+		});
+
+		test('user with no accessible workflows sees empty result (no data leak)', async () => {
+			// member has no personal workflows and is not in any team project.
+			// The IN subquery must return an empty set — not all executions.
+			const ownerWf = await createWorkflow({}, owner);
+			await createExecution({ status: 'success' }, ownerWf);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				user: member,
+				sharingOptions: personalOnly,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			expect(result.count).toBe(0);
+			expect(result.results).toHaveLength(0);
+		});
+
+		test('member in multiple team projects sees executions from all of them', async () => {
+			const project1 = await createTeamProject(undefined, member);
+			const project2 = await createTeamProject();
+			await linkUserToProject(member, project2, 'project:editor');
+
+			const wf1 = await createWorkflow({}, project1);
+			const wf2 = await createWorkflow({}, project2);
+			const otherWf = await createWorkflow({}, owner);
+
+			await Promise.all([
+				createExecution({ status: 'success' }, wf1),
+				createExecution({ status: 'success' }, wf2),
+				createExecution({ status: 'success' }, wf2),
+				createExecution({ status: 'success' }, otherWf), // must NOT appear
+			]);
+
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				user: member,
+				sharingOptions: sharingEnabled,
+			};
+
+			const result = await executionService.findRangeWithCount(query);
+
+			expect(result.count).toBe(3);
+			const workflowIds = result.results.map((r) => r.workflowId);
+			expect(workflowIds).toContain(wf1.id);
+			expect(workflowIds).toContain(wf2.id);
+			expect(workflowIds).not.toContain(otherWf.id);
+		});
+
+		/**
+		 * Performance smoke-test — IAM-680 regression guard.
+		 *
+		 * Seeds N_WORKFLOWS workflows (all owned by the same team project) and
+		 * N_EXECUTIONS executions spread across them, then runs findRangeWithCount
+		 * with project:admin sharingOptions QUERY_RUNS times.  The median must stay
+		 * below THRESHOLD_MS.
+		 *
+		 * This exercises exactly the code-path that caused the CrowdStrike CPU spike:
+		 * the IN subquery path for a non-global-admin user.  If someone accidentally
+		 * reverts the fix back to a correlated EXISTS, even this moderate dataset will
+		 * show noticeably higher latency, and the assertion will catch it on Postgres.
+		 *
+		 * On SQLite the dataset is smaller and the threshold is relaxed; SQLite is
+		 * single-threaded and doesn't experience the same Seq Scan amplification.
+		 */
+		test('query time is acceptable at moderate scale (IAM-680 performance guard)', async () => {
+			const isPostgres = process.env.DB_TYPE === 'postgresdb';
+
+			// Dataset sizes: keep total seeding time < 30 s on CI.
+			const N_WORKFLOWS = isPostgres ? 200 : 20;
+			const N_EXECUTIONS_PER_WF = isPostgres ? 50 : 10; // 10 k / 200 total
+			const QUERY_RUNS = 5;
+			const THRESHOLD_MS = isPostgres ? 500 : 2000;
+
+			// ── Seed ──────────────────────────────────────────────────────────
+			const teamProject = await createTeamProject(undefined, member);
+
+			// Create all workflows in parallel batches to keep seed time manageable.
+			const BATCH = 20;
+			const workflows = [];
+			for (let i = 0; i < N_WORKFLOWS; i += BATCH) {
+				const batchSize = Math.min(BATCH, N_WORKFLOWS - i);
+				const batch = await Promise.all(
+					Array.from({ length: batchSize }, async () => await createWorkflow({}, teamProject)),
+				);
+				workflows.push(...batch);
+			}
+
+			// Seed executions directly via the repository to avoid per-row overhead of
+			// createExecution() (which also writes execution_data and metadata rows).
+			const executionRepository = Container.get(ExecutionRepository);
+			const execRecords = workflows.flatMap((wf) =>
+				Array.from({ length: N_EXECUTIONS_PER_WF }, () => ({
+					workflowId: wf.id,
+					finished: true,
+					mode: 'manual' as const,
+					status: 'success' as const,
+					createdAt: new Date(),
+					startedAt: new Date(),
+					stoppedAt: new Date(),
+					waitTill: null,
+				})),
+			);
+
+			// Insert in chunks to avoid hitting SQLite's SQLITE_MAX_VARIABLE_NUMBER.
+			const INSERT_CHUNK = 500;
+			for (let i = 0; i < execRecords.length; i += INSERT_CHUNK) {
+				await executionRepository
+					.createQueryBuilder()
+					.insert()
+					.into('execution_entity')
+					.values(execRecords.slice(i, i + INSERT_CHUNK))
+					.execute();
+			}
+
+			// ── Measure ───────────────────────────────────────────────────────
+			const query: ExecutionSummaries.RangeQuery = {
+				kind: 'range',
+				range: { limit: 20 },
+				user: member,
+				sharingOptions: {
+					workflowRoles: ['workflow:owner', 'workflow:editor'],
+					projectRoles: ['project:personalOwner', 'project:admin', 'project:editor'],
+				},
+			};
+
+			const latencies: number[] = [];
+			for (let i = 0; i < QUERY_RUNS; i++) {
+				const t0 = performance.now();
+				await executionService.findRangeWithCount(query);
+				latencies.push(performance.now() - t0);
+			}
+
+			const sorted = [...latencies].sort((a, b) => a - b);
+			const median = sorted[Math.floor(sorted.length / 2)]!;
+
+			console.log(
+				`[IAM-680 perf] ${N_WORKFLOWS} workflows × ${N_EXECUTIONS_PER_WF} execs each` +
+					` | median ${median.toFixed(1)} ms | threshold ${THRESHOLD_MS} ms` +
+					` | runs: [${latencies.map((v) => v.toFixed(1)).join(', ')}]`,
+			);
+
+			expect(median).toBeLessThan(THRESHOLD_MS);
+		}, 120_000); // allow up to 2 min for seeding + queries on CI
 	});
 });

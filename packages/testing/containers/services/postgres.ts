@@ -127,6 +127,14 @@ export class PostgresHelper {
 		return result.output;
 	}
 
+	/**
+	 * Restart the Postgres container to fully flush shared_buffers and OS page cache.
+	 * Use before cold-cache benchmarks where buffer state would otherwise skew results.
+	 */
+	async restart(): Promise<void> {
+		await this.container.restart();
+	}
+
 	/** Reset pg_stat_statements counters — call before measuring. */
 	async resetStatStatements(): Promise<void> {
 		await this.exec('SELECT pg_stat_statements_reset();');
