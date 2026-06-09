@@ -7,6 +7,7 @@ import { PrometheusActiveWorkflowMetricsService } from './active-workflow-metric
 import type { PrometheusMetricsCollector } from './base';
 import { PrometheusCacheMetricsService } from './cache-metrics.service';
 import { PrometheusDefaultMetricsService } from './default-metrics.service';
+import { PrometheusDnsCacheMetricsService } from './dns-cache-metrics.service';
 import { PrometheusEventBusMetricsService } from './event-bus-metrics.service';
 import { PrometheusExecutionDataMetricsService } from './execution-data-metrics.service';
 import { PrometheusInstanceRoleMetricsService } from './instance-role-metrics.service';
@@ -39,6 +40,7 @@ export class PrometheusMetricsService {
 		version: PrometheusVersionMetricsService,
 		defaultMetrics: PrometheusDefaultMetricsService,
 		tokenExchange: PrometheusTokenExchangeMetricsService,
+		dnsCache: PrometheusDnsCacheMetricsService,
 	) {
 		this.logger = logger.scoped('metrics');
 		this.collectors = [
@@ -55,6 +57,7 @@ export class PrometheusMetricsService {
 			version,
 			defaultMetrics,
 			tokenExchange,
+			dnsCache,
 		];
 	}
 

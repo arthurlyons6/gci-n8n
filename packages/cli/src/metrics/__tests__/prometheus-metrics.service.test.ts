@@ -7,6 +7,7 @@ import promClient from 'prom-client';
 import type { PrometheusActiveWorkflowMetricsService } from '../prometheus/active-workflow-metrics.service';
 import type { PrometheusCacheMetricsService } from '../prometheus/cache-metrics.service';
 import type { PrometheusDefaultMetricsService } from '../prometheus/default-metrics.service';
+import type { PrometheusDnsCacheMetricsService } from '../prometheus/dns-cache-metrics.service';
 import type { PrometheusEventBusMetricsService } from '../prometheus/event-bus-metrics.service';
 import type { PrometheusExecutionDataMetricsService } from '../prometheus/execution-data-metrics.service';
 import type { PrometheusInstanceRoleMetricsService } from '../prometheus/instance-role-metrics.service';
@@ -38,6 +39,7 @@ describe('PrometheusMetricsService', () => {
 	let version: jest.Mocked<PrometheusVersionMetricsService>;
 	let defaultMetrics: jest.Mocked<PrometheusDefaultMetricsService>;
 	let tokenExchange: jest.Mocked<PrometheusTokenExchangeMetricsService>;
+	let dnsCache: jest.Mocked<PrometheusDnsCacheMetricsService>;
 
 	let service: PrometheusMetricsService;
 
@@ -57,6 +59,7 @@ describe('PrometheusMetricsService', () => {
 			version,
 			defaultMetrics,
 			tokenExchange,
+			dnsCache,
 		);
 
 	beforeEach(() => {
@@ -83,6 +86,7 @@ describe('PrometheusMetricsService', () => {
 		version = mock<PrometheusVersionMetricsService>({ enabled: true });
 		defaultMetrics = mock<PrometheusDefaultMetricsService>({ enabled: true });
 		tokenExchange = mock<PrometheusTokenExchangeMetricsService>({ enabled: true });
+		dnsCache = mock<PrometheusDnsCacheMetricsService>({ enabled: true });
 
 		service = buildService();
 	});
@@ -108,6 +112,7 @@ describe('PrometheusMetricsService', () => {
 			expect(version.init).toHaveBeenCalledWith(app);
 			expect(defaultMetrics.init).toHaveBeenCalledWith(app);
 			expect(tokenExchange.init).toHaveBeenCalledWith(app);
+			expect(dnsCache.init).toHaveBeenCalledWith(app);
 		});
 
 		it('should NOT call init on disabled collectors', () => {

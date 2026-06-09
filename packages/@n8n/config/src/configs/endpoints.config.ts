@@ -83,6 +83,10 @@ export class PrometheusMetricsConfig {
 	/** Whether to include metrics for execution data reads and writes. */
 	@Env('N8N_METRICS_INCLUDE_EXECUTION_DATA_METRICS')
 	includeExecutionDataMetrics: boolean = false;
+
+	/** Whether to include metrics for the DNS cache (currently only used by SSRF protection). */
+	@Env('N8N_METRICS_INCLUDE_DNS_CACHE_METRICS')
+	includeDnsCacheMetrics: boolean = false;
 }
 
 @Config
