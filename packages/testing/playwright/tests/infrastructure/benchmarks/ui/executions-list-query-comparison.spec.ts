@@ -434,6 +434,15 @@ test.describe(
 					WHERE execution."workflowId" IN (${accessSubqueryIn})
 				`;
 
+			// ── Create HTTP API context BEFORE any postgres.restart() ───────────
+			// postgres.restart() flushes shared_buffers but leaves n8n's connection
+			// pool in a broken state until n8n reconnects. services.postgres.exec()
+			// bypasses n8n (direct TCP), so SQL queries succeed immediately after
+			// restart — but n8n's /rest/login still returns 503 until it reconnects.
+			// Login once here while the DB is definitely healthy; the session cookie
+			// is retained in adminApi.request and remains valid across restarts.
+			const adminApi = await n8n.api.createApiForUser(ctx.admin);
+
 			// ── EXPLAIN ANALYZE (single cold run each, before the timing loop) ──
 			await services.postgres.restart();
 			const explainExists = await services.postgres.exec(
@@ -443,11 +452,6 @@ test.describe(
 			const explainIn = await services.postgres.exec(
 				`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${sqlInCount}`,
 			);
-
-			// ── Create HTTP API context before SQL loops (DB is healthy here) ──
-			// Must be done before the SQL cold-cache loops that restart Postgres;
-			// login would fail if called after a restart with no wait.
-			const adminApi = await n8n.api.createApiForUser(ctx.admin);
 
 			// ── Cold-cache measurement ────────────────────────────────────────
 			const getManyExistsLat: number[] = [];
