@@ -142,6 +142,72 @@ For resource-locator fields, preserve explicit names as names. For example,
 `#daily-digest` should stay a channel name value, not become an empty id-mode
 locator. Use an empty id-mode locator only when the user did not name the target.
 
+## Structured Build Brief
+
+Before writing workflow code, translate the user request or planned task spec into
+an internal build brief. Do not show this brief to the user, but use it as your
+completion checklist:
+
+- `Outcome`: the observable workflow outcome in one sentence.
+- `Trigger mode`: Webhook, Schedule, Chat, Form, Manual, or Other.
+- `External systems`: every external service involved, or None.
+- `Required effects`: every final action the user asked for, such as send,
+  post, respond, create, update, notify, summarize, log, or upsert.
+- `Required branches`: valid, invalid, empty, no-results, success, failure, and
+  partial-failure behaviors that must remain distinct.
+- `Independent failures`: any source or final effect that may fail without
+  blocking the other required sources, branches, or effects. Keep those paths
+  isolated with supported continue/error-output behavior and turn failures into
+  explicit error records or alternate responses.
+- `Effect eligibility`: which fields are required for the whole item versus
+  required only for one requested side effect. Gate only the effect that needs a
+  missing or invalid field; keep logging, notifications, acknowledgements, and
+  other effects running when they can use the remaining data.
+- `Required data`: fields needed by later conditions, ranking, response
+  messages, or downstream effects, especially fields that must survive
+  side-effect nodes that replace item JSON, branch merges, and nodes that fan
+  one source item out into many output items.
+- `Item-count plan`: for each important connection, decide whether the
+  downstream node should run once or once per incoming item. Mark shared-context
+  fetches, report builders, summaries, and final digest/ranking posts that need
+  `executeOnce: true`, and avoid merging multiple trigger start items into the
+  same fetch or aggregate path.
+- `Final effect payloads`: for each terminal send, post, respond, create,
+  update, notify, log, or upsert action, name the immediate upstream node and
+  exact field path the action will read. If a summarizer, AI node, Aggregate,
+  Code node, or side-effect node changes the JSON shape, normalize the value
+  into a stable field before the terminal action. LLM Chain nodes output their
+  generated text at `$json.text`, not `$json.response.text`. OpenAI
+  `text/response` with simplified output returns generated messages under
+  `$json.output[0].content[0].text`, not a top-level `$json.text`; when using
+  JSON schema output, that nested `text` value may already be an object, so
+  only call `JSON.parse` after a `typeof value === 'string'` check.
+- `External field contract`: exact fields, labels, relationships, identities,
+  and date/window values that must be requested from external systems. Do not
+  infer related facts from primary records when the workflow needs a real
+  mapping, membership, label, owner, or timestamp field.
+- `Required source reads`: every external data source needed to compute the
+  final output. If a ranking, digest, report, or summary mentions Linear,
+  BigQuery, Jira, GitHub, Slack history, Sheets rows, or another data source,
+  include actual read/query/fetch nodes for those sources before formatting the
+  final message; a schedule/window item or hardcoded placeholder rows are not
+  source data.
+- `Explicit constraints`: concrete user-stated URLs, channels, tables, labels,
+  resource names, node families, or mechanisms. Preserve these exactly when
+  safe; do not move them into assumptions or placeholders. If the user explicitly
+  names a node family or mechanism such as HTTP Request, webhook, form, MCP, or
+  a service-native node, treat it as a hard requirement unless it is impossible
+  or contradicts another stated requirement. Do not silently replace an explicit
+  mechanism with a more convenient native node.
+- `Empty/invalid behavior`: what should happen when input is empty, filtered out,
+  malformed, or missing a field required by only one effect.
+- `Done when`: observable acceptance checks, including every final action and
+  branch behavior.
+
+Use the brief to prevent scope loss. A workflow is not done if it only performs
+preprocessing, aggregation, prompt construction, validation, or logging while
+missing a required final user-facing effect.
+
 ## Mandatory Process
 
 1. Research. If the workflow fits a known category, call
@@ -160,12 +226,25 @@ locator. Use an empty id-mode locator only when the user did not name the target
 4. Read `@builderHint`, `@default`, `@searchListMethod`, `@loadOptionsMethod`,
    valid enum values, credential types, and display conditions in the returned
    definitions.
+   For Set/Edit Fields nodes using `assignmentCollection`, each assignment
+   entry must use `{ name, type, value }`; do not use legacy keys such as
+   `stringValue`, `numberValue`, or `booleanValue`, and do not use the legacy
+   `fields.values` structure, because these produce empty output in recent Set
+   node versions.
 5. Resolve real resource IDs. For each parameter with `searchListMethod` or
    `loadOptionsMethod`, call `nodes(action="explore-resources")` with the exact
    method name, method type, credential type, and credential ID. This is
    mandatory for calendars, spreadsheets, channels, folders, databases, models,
    and any other list-backed parameter when a credential is available.
 6. Build complete TypeScript SDK code and call `build-workflow`.
+   For new main workflows, include `requiredFinalActions`: one entry for every
+   user-requested terminal effect from the build brief, with `description` and
+   the exact enabled terminal action `nodeNames` that perform it. Do not list
+   triggers, IF/Switch/Merge, Code, Set/Edit Fields, Aggregate, validation, or
+   prompt-construction nodes as final actions. If the user asked to send email,
+   post to Slack, notify Telegram, respond to a webhook, log to Google Sheets,
+   or upsert Airtable, the listed node must be the actual Email/Gmail, Slack,
+   Telegram, Respond to Webhook, Google Sheets, or Airtable action node.
    For planned build follow-ups where `buildTask.isSupportingWorkflow === true`,
    pass `isSupportingWorkflow: true`; that saved supporting workflow is the
    task's final deliverable.
@@ -175,15 +254,88 @@ locator. Use an empty id-mode locator only when the user did not name the target
    use zero-based `.onCase(index, target)`, Merge modes match the data shape,
    single-output nodes are not wired through invented output ports, sub-nodes
    are attached to the correct parent, and every required final effect has a
-   downstream action node.
-8. Fix errors. If `build-workflow` returns errors, repair with targeted patches
+   downstream action node. If one external source or side-effect can fail while
+   the workflow should continue, configure the node's supported `onError`
+   behavior and merge successful and failed records deliberately.
+   Trace item counts for each connection. If node A emits N items, decide
+   whether node B must run N times or once; use `executeOnce: true` for
+   shared-context fetches, report construction, summaries, rankings, and final
+   one-message posts that should not multiply by input count. Multiple triggers
+   are alternate starts, not data to aggregate; do not Merge Manual and
+   Schedule trigger items before shared external reads or counts.
+   For multi-effect intake workflows, separate whole-item rejection from
+   side-effect eligibility. A missing or invalid value needed by one requested
+   effect must gate or fail only that effect; it must not block logging,
+   notifications, acknowledgements, or other effects that can use the remaining
+   data unless the user explicitly requires all-or-nothing behavior. This
+   applies to IF, Switch, and Filter/unmatched-output gates: an invalid email
+   may skip only the email send, and an empty message must not skip logging or
+   team notification when those effects can use fallback or empty content.
+   For multi-source summaries or digests, keep empty results, successful reads,
+   and failed reads distinct. Empty is a successful zero-item read. If one
+   source may fail without stopping the workflow, use the node's supported
+   continue/error-output behavior and feed the aggregator either successful data
+   or one failure record for that source.
+   For independent final effects, a failure in one action must not abort other
+   required effects unless the user asked for all-or-nothing behavior. Use the
+   node's supported error mode and convert the result into a success/failure
+   record before fan-in; do not create synthetic failure records on the success
+   path.
+   If several branches feed one summary, ranking, digest, or final response,
+   merge the branches before the aggregator so it runs once over the full data
+   set rather than once per branch.
+   Do not use `SplitInBatches` as the collector for a fixed set of external
+   sources in a digest/report path. Its done branch does not accumulate body
+   outputs, and a zero-item source read can leave the final aggregator with no
+   source records. Prefer parallel source branches plus an explicit merge, or
+   explicitly emit one success/empty/failure record per source before fan-in.
+   If a final report, ranking, digest, or summary depends on named external
+   sources such as Linear issues, BigQuery usage, Slack history, or Sheets rows,
+   verify the graph has reachable read/query/fetch nodes for each named source
+   before the formatter and final post. Do not build only the schedule, window
+   calculation, formatter, and final Slack/email action. If using a Merge before
+   the formatter, each Merge input must be fed by the actual source read output
+   or a normalizer downstream of that read, not by the shared schedule/window/IF
+   item. Source-specific counters or normalizers, such as "Count Linear Bugs" or
+   "Normalize Usage", must be wired from the matching source read output or a
+   downstream normalizer for that source.
+   Trace the payload field path for every final action. The expression in the
+   final node must read a field that exists on its immediate upstream item, or a
+   deliberately preserved source-node field. Do not guess common names like
+   `$json.text`, `$json.message`, or `$json.temperature` after nodes that may
+   output nested objects or replace JSON; inspect or normalize the shape first.
+   For LLM Chain summarizers, use `$json.text` or normalize it to a named field;
+   `$json.response.text` is not produced by that node.
+   When a source node can emit many output items for one input item, stamp
+   required source metadata such as channel, city, account, or request ID before
+   flattening, or carry it inside the same transformation that expands the
+   records. Do not recover source identity later by indexing a fixed source list
+   with `pairedItem.item` or item position unless the node is explicitly
+   one-output-per-input.
+   Do not use `$('Source List').item.json...` to recover channel, city, account,
+   team, label, or origin after an external read, multi-record fan-out, or error
+   output. That paired item may be absent or may point at a record index rather
+   than the original source. Carry the source fields on the current item before
+   fan-out, and create failure records with explicit source fields only on the
+   real error path.
+8. Verify the final user-facing outcome exists. Trace the graph from the trigger
+   to the terminal action the user actually asked for. If the request says to
+   send, post, respond, create, update, notify, summarize, or log, the workflow
+   must include an enabled node that performs that result; preprocessing,
+   aggregation, validation, prompt construction, or a disabled action node does
+   not satisfy the request.
+9. Fix errors. If `build-workflow` returns errors, repair with targeted patches
    when possible, or resubmit full SDK code for larger changes. Save again before
    any verification step.
-9. Modify existing workflows with `workflowId` plus patches where possible. Use
+10. Modify existing workflows with `workflowId` plus patches where possible. Use
    `workflows(action="get-as-code")` first when you need to identify exact code
    to replace.
-10. Finish with a concise completion message only when the build, required
+11. Finish with a concise completion message only when the build, required
     setup routing, or required verification path is complete.
+
+After any successful direct `build-workflow` save, load `post-build-flow` and
+follow it before writing final text or handling setup/publish requests. Do not
+stop at build/save success.
 
 Do not produce visible output until the final step, unless blocked.
 
@@ -366,6 +518,11 @@ configure an upsert against a table name whose match columns were never created.
 - Do not specify node positions. They are auto-calculated by the layout engine.
 - Use `expr('{{ $json.field }}')` for n8n expressions. Variables must be inside
   `{{ }}`. `$json` is only the current item from the immediate predecessor.
+- For OpenAI `text/response` prompt fields, avoid mixed literal/interpolation
+  expressions like `expr('Here are {{ $json.emailCount }} emails')`. Use a full
+  expression, for example
+  `expr('{{ "Here are " + $json.emailCount + " emails\\n\\n" + $json.emailsText }}')`,
+  or build a `prompt` field in Code and map it with `expr('{{ $json.prompt }}')`.
 - Do not use TypeScript-only syntax that the workflow parser cannot interpret,
   such as `as const`.
 - Use string values directly for discriminator fields like `resource` and
@@ -378,9 +535,10 @@ configure an upsert against a table name whose match columns were never created.
   field.
 - For unresolved resource-locator fields (values shaped like `{ __rl: true,
   mode, value }`, such as Slack channel selectors), use the resource-locator
-  object shape instead of a raw `placeholder()` string. If no credential exists
-  to resolve a real channel, prefer id mode with an empty value and a cached
-  result name, for example `{ __rl: true, mode: 'id', value: '',
+  object shape instead of a raw `placeholder()` string. If the user explicitly
+  named the resource, preserve that value in the best supported name-based
+  locator shape. Use id mode with an empty value only when the target is missing
+  or ambiguous, for example `{ __rl: true, mode: 'id', value: '',
   cachedResultName: 'Select support channel to monitor' }`.
 - For single-execution nodes that receive many items but should run once, set
   `executeOnce: true`.
@@ -402,9 +560,18 @@ configure an upsert against a table name whose match columns were never created.
 - Do not call LLM APIs from a Code node. For summarization, extraction, routing,
   or chat behavior, use AI/LangChain nodes and wire their output fields
   explicitly.
-- For embedded Code node source in `build-workflow`, do not use `String.raw`.
-  Prefer simple strings, arrays of lines joined with `String.fromCharCode(10)`,
-  and avoid nested template literals or escape-heavy regex/newline literals.
+- For embedded Code node source in `build-workflow`, do not use `String.raw`;
+  the workflow parser rejects tagged templates in SDK code. Keep the embedded
+  source parser-safe at both SDK-build time and Code-node runtime: avoid nested
+  template literals, avoid quoted `\n` / `\r\n` escapes that can become raw line
+  breaks inside saved JavaScript strings, and prefer `const LF =
+  String.fromCharCode(10);` with arrays of lines joined by `LF`.
+- Avoid regex literals and other escape-heavy Code-node source when ordinary
+  string helpers can express the same check. Backslash escapes such as `\s`,
+  `\r`, and `\n` can be lost while the workflow source is saved. Prefer
+  `includes`, `indexOf`, `split(LF).join(...)`, character-code separators, or
+  small explicit predicates. If a regex is truly necessary, inspect the saved
+  workflow JSON before declaring the build done.
 
 Use this import shape unless the task needs fewer symbols:
 
@@ -454,10 +621,17 @@ Follow these rules strictly when generating workflows:
    once, such as a summary notification, report generation, shared-context
    fetch, or API call that does not vary per input item. Duplicate
    notifications or repeated shared-context fetches usually mean this is
-   missing.
+   missing. Do not Merge multiple trigger start items into the same shared
+   fetch, count, aggregate, or final-action path; choose the trigger cadence in
+   the trigger configuration, or keep alternate trigger paths isolated until
+   after data has been deduplicated.
 4. Pick the right control-flow primitive:
    - Per-item loop with side effects: `splitInBatches` with `batchSize: 1`,
      feeding the per-item work and looping back via `nextBatch`.
+     `splitInBatches` does not accumulate successful per-iteration output for
+     the done branch. If the final outcome needs all fetched records, build a
+     structure that preserves or appends each iteration's successful data before
+     aggregation, or fetch all records in one request when the API allows it.
    - Drop items that do not match a predicate: `filter`.
    - Two mutually exclusive paths that both do real work: IF with `.onTrue()`
      and `.onFalse()`.
@@ -479,6 +653,17 @@ Follow these rules strictly when generating workflows:
    or message through a setup/logging/action node if it still needs the original
    fields. Fan out from the trigger or normalized item, or use
    `$('Source').item.json...` / `nodeJson(sourceNode, 'field')` for the source.
+   Exception: after an external read that can fan one source into many records,
+   or on a node's error output, do not recover source identity from
+   `$('Source List').item`. Carry the source fields on the current item before
+   the read, or emit explicit success/failure records that include them.
+   If an intake form, webhook, or trigger provides one full-name field but a CRM
+   or destination schema has separate first-name and last-name fields, normalize
+   the source value before writing. Map the first token/group to first name, the
+   remaining tokens to last name, and use an empty last name only when the source
+   really contains a single name. Preserve other form fields such as company,
+   interest level, message, and email as distinct destination properties when
+   the target schema supports them.
 7. Gate only what the condition controls. If logging must happen for every
    weather reading, lead, issue, or form submission, wire the logging path before
    the IF/Switch or from a parallel fan-out. The temperature, validity, priority,
@@ -490,11 +675,18 @@ Follow these rules strictly when generating workflows:
    `.add(source.to(action))` connections from output 0, not additional output
    indices. If one effect may fail without blocking the others, check the node
    definition for supported continue/error-output behavior and add an explicit
-   recovery branch only when the node supports it.
+   recovery branch only when the node supports it. Before fan-in, convert each
+   independent effect or source into either success data or one real failure
+   record; never emit both for the same source/effect, and never let an
+   unhandled non-critical action failure stop unrelated required effects.
 9. Fetch field-complete external data before depending on it. If downstream
    logic uses labels, team memberships, related records, pagination fields, or
    nested properties, make sure the upstream node or query requests those fields.
-   If the native node cannot fetch the needed shape, use HTTP Request or another
+   Include the exact identifiers, owners/creators, labels, timestamps, date
+   windows, relationship fields, and membership mappings used by filters,
+   rankings, and reports. Do not infer a person's team, an item's label, or a
+   reporting window from whichever primary records happened to arrive first. If
+   the native node cannot fetch the needed shape, use HTTP Request or another
    API-capable node.
 10. Preserve list itemization. HTTP and app nodes may return one item per record,
     a top-level array, or an envelope such as `records`, `body`, or `data`.
@@ -502,6 +694,12 @@ Follow these rules strictly when generating workflows:
     into one item per record with built-in nodes when possible. Use Merge
     append-style behavior for independent lists; do not use positional combine
     when each input represents a separate record set.
+    For existence checks before create/upsert, keep the candidate source item as
+    the current item until the create/update node. Some lookup nodes emit zero
+    items or a collapsed result when no match exists, so a downstream IF cannot
+    create the missing record from the lookup output. Prefer fetching existing
+    records once and comparing in Code, or emit exactly one source-preserving
+    `{ exists, source }` item per candidate before the create/update branch.
 11. Aggregate only when the requested effect is one message or record. If the
     user asks for one digest, summary, count, ranking, or report, aggregate the
     filtered items first and send one final item. If an Aggregate node wraps
@@ -510,6 +708,31 @@ Follow these rules strictly when generating workflows:
     "count", "digest", "summary", "ranking", or "list the titles" means the
     notification should be one aggregated message, not one message per item. If
     the user asks for one action per item, keep the stream itemized.
+    For multi-source digests, do not rely on a direct multi-input Merge into
+    Aggregate `aggregateAllItemData` unless you have verified that the aggregate
+    receives and preserves every merged item. Prefer a Code node using
+    `$input.all()` to build the prompt/report from all merged items, or another
+    explicit shape-preserving transform, before the final summarizer or post.
+    For fixed source lists, avoid `SplitInBatches` as the final collector. It
+    does not accumulate loop body outputs on the done branch; emit one
+    success/empty/failure record per source before fan-in, or use parallel
+    source branches with an explicit merge.
+    For reports that combine named sources such as Linear and BigQuery, verify
+    every Merge input is sourced from the actual read output or a downstream
+    normalizer for that source. Do not wire the same schedule/window/IF output
+    into multiple Merge inputs while the real source reads run on side branches.
+    Source-specific counters and normalizers must also have the source read
+    upstream; a Linear bug counter should not receive only the schedule/window
+    item, and a usage normalizer should not receive only the cadence gate item.
+    Do not use a SQL Merge such as `SELECT * FROM input1` as the bridge from a
+    possibly empty candidate list plus lookup data into create/update actions.
+    When the candidate list is empty, the workflow must emit zero create/update
+    items. Keep the candidate stream as the current item, join lookup data in
+    Code with `$input.all()` or an explicit source-preserving shape, and return
+    an empty array when there are no candidates.
+    Do not set `executeOnce: true` on that post-Merge Code aggregator. Use Code
+    mode `runOnceForAllItems` with `$input.all()` so the node sees every merged
+    item exactly once.
     When the prompt asks for a ranking, leaderboard, top list, or "sorted by
     count", compute one row per ranked entity, then sort by the requested score
     or count before formatting. Do not rely on input order or alphabetical team
@@ -519,7 +742,35 @@ Follow these rules strictly when generating workflows:
     if that branch receives 0 items. For required no-results behavior, branch or
     aggregate before dropping the stream to zero, or build a separate fallback
     path from the pre-filter source.
-
+    For Gmail/email inbox digests, a Gmail search/read node can emit 0 items
+    when there are no recent messages. An IF, Filter, Code, Aggregate, or AI node
+    placed directly after that Gmail node will not run, so its "no emails" branch
+    is unreachable, even if fallback text is written inside that downstream
+    Code/AI node. Preserve one scheduled seed item before the read, or normalize
+    the read into one `{ emailCount, emails }` summary item before branching and
+    sending the digest.
+13. Terminal action payloads must come from the actual upstream shape. Before
+    declaring done, check every final send/post/respond/create/update/log node's
+    expressions against the node immediately upstream. AI and summarization
+    nodes often output nested fields, Aggregate nodes may wrap arrays, and
+    side-effect nodes often replace item JSON. If the final action needs a
+    message, count, city, temperature, or record ID, preserve or normalize that
+    value into a named field and read that named field in the terminal node.
+    LLM Chain outputs generated text at `$json.text`; do not post from
+    `$json.response.text` unless you created that envelope yourself. OpenAI
+    `text/response` outputs simplified generated content under
+    `$json.output[0].content[0].text`; if the response uses JSON schema,
+    normalize that nested `text` value with `typeof value === 'string' ?
+    JSON.parse(value) : value` before a Code node or final Gmail/Slack action
+    reads it. Do not read `$json.text`, `$json.content`, or `$json.message`
+    directly after OpenAI `text/response`.
+14. Let Schedule nodes control cadence. If the user asks for a daily, weekly,
+    bi-weekly, every-two-weeks, or fortnightly workflow, configure the Schedule
+    trigger for that cadence. Do not add an extra posting-week,
+    posting-fortnight, run-today, or cadence IF/Switch that can route every
+    requested final action to an unconnected no-op branch unless the user
+    explicitly asked for runtime suppression inside an otherwise more frequent
+    schedule. An omitted false branch is still a no-op branch.
 ## Tool Naming Rules
 
 - Name tools by the action they perform, not by repeating the integration or
@@ -550,6 +801,11 @@ Follow these rules strictly when generating workflows:
   the literal binary property key, for example `image`, `data`, or `audio`. Do
   not set it to `={{ $binary.image }}`; that passes the binary object instead of
   the property name.
+- When the user asks for Slack `files.upload`, the Slack file-upload node is the
+  requested Slack terminal action. Put the caption/comment on the upload node
+  with its supported comment field. Do not add a separate Slack message-post
+  node for the same caption unless the user explicitly asks for an additional
+  message.
 - For Webhook payload expressions, use the exact field names from the payload.
   If the body uses `level`, read `$json.body.level`; do not rename it to
   `$json.body.urgency` unless an earlier node created that field.
@@ -562,11 +818,20 @@ Follow these rules strictly when generating workflows:
   `jsonBody: expr('{{ JSON.stringify({ query: "...", variables: { startDate:
   $json.startDate } }) }}')` or key/value body parameters from the node
   definition.
+- GraphQL and many HTTP APIs return an envelope. If the request body has a
+  GraphQL `query`, expect records under `json.data...` or `json.body.data...`,
+  not directly under `json.<resource>`. Downstream Code or Set nodes must unwrap
+  the actual response shape before filtering, ranking, or reporting.
 - For resource mapper parameters such as Google Sheets `columns`, when using
   `mappingMode: 'defineBelow'`, include both `value` and the matching
   `schema` entries required by the node definition. If you cannot determine the
   schema, prefer an auto-map mode only when the incoming field names already
   match the destination.
+  For webhook/form payloads, normalize nested fields such as `$json.body.name`,
+  `$json.body.email`, and `$json.body.message` into top-level fields with Set or
+  Code before a Google Sheets/Airtable resource-mapper write, then map columns
+  from `$json.name`, `$json.email`, `$json.message`, etc. Do not pass the raw
+  trigger envelope directly into a define-below resource mapper.
 - If the request specifically calls for an MCP registry tool or the seeded MCP
   registry, use the registry node/tool type from discovery. Do not substitute a
   native app node with a similar service name.

@@ -5,7 +5,7 @@ export {
 	SDK_IMPORT_STATEMENT,
 } from './extract-code';
 export { applyPatches } from './patch-code';
-export { parseAndValidate, partitionWarnings } from './parse-validate';
+export { parseAndValidate, partitionWarnings, validateCodeNodeSyntax } from './parse-validate';
 export {
 	EXPRESSION_REFERENCE,
 	ADDITIONAL_FUNCTIONS,

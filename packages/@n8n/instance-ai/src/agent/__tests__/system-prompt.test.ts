@@ -98,6 +98,7 @@ describe('getSystemPrompt', () => {
 			expect(prompt).toContain('**Single workflow build or edit**');
 			expect(prompt).toContain('`workflow-builder`');
 			expect(prompt).toContain('`build-workflow`');
+			expect(prompt).toContain('`requiredFinalActions`');
 			expect(prompt).toContain('**Multi-workflow or coordinated architecture**');
 			expect(prompt).toContain('`planning`');
 			expect(prompt).toContain('planningContext.source: "planning-skill"');
@@ -145,6 +146,7 @@ describe('getSystemPrompt', () => {
 			const prompt = getSystemPrompt({});
 
 			expect(prompt).toContain('`post-build-flow`');
+			expect(prompt).toContain('After every successful direct build save');
 			expect(prompt).toContain('`planned-task-runtime`');
 			expect(prompt).toContain('`debugging-executions`');
 		});

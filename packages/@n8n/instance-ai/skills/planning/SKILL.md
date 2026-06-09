@@ -99,8 +99,12 @@ with direct `data-tables` and `parse-file` calls.
   response messages, or downstream effects, and note when those fields must
   remain available after side-effect nodes that replace item JSON.
 - In `Explicit constraints`, preserve concrete user-provided resource names,
-  channels, tables, labels, URLs, and required node families. Do not move those
-  values to assumptions or replace them with placeholders.
+  channels, tables, labels, URLs, and required node families or mechanisms. If
+  the user explicitly says to use a node family or mechanism such as HTTP
+  Request, webhook, form, MCP, or a service-native node, treat that as a hard
+  requirement unless it is impossible or contradicts another stated requirement.
+  Do not move those values to assumptions, replace them with placeholders, or
+  silently swap them for a more convenient alternative.
 - In `Done when`, write observable acceptance checks, including final actions
   and branch behavior. Do not write node-by-node wiring or fake user data.
 - If a `build-workflow` task's final deliverable is a supporting sub-workflow,

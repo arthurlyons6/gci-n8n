@@ -107,6 +107,46 @@ describe('Instance AI runtime skills', () => {
 		expect(loaded?.instructions).toContain('workflows(action="get-json", workflowId)');
 		expect(loaded?.instructions).toMatch(/inline setup card in the AI\s+Assistant panel/);
 		expect(loaded?.instructions).toContain('Do not call `delegate`');
+		expect(loaded?.instructions).toContain('do not use `String.raw`');
+		expect(loaded?.instructions).toContain('String.fromCharCode(10)');
+		expect(loaded?.instructions).toMatch(/avoid regex literals/i);
+		expect(loaded?.instructions).toContain('include `requiredFinalActions`');
+		expect(loaded?.instructions).toContain('one entry for every');
+		expect(loaded?.instructions).toContain('Final effect payloads');
+		expect(loaded?.instructions).toContain('External field contract');
+		expect(loaded?.instructions).toContain('Required source reads');
+		expect(loaded?.instructions).toContain('Item-count plan');
+		expect(loaded?.instructions).toContain('Trace item counts for each connection');
+		expect(loaded?.instructions).toContain('splitInBatches` does not accumulate');
+		expect(loaded?.instructions).toContain('Do not use `SplitInBatches` as the collector');
+		expect(loaded?.instructions).toContain('direct multi-input Merge into');
+		expect(loaded?.instructions).toContain(
+			'each Merge input must be fed by the actual source read output',
+		);
+		expect(loaded?.instructions).toContain('Source-specific counters or normalizers');
+		expect(loaded?.instructions).toContain(
+			'Do not set `executeOnce: true` on that post-Merge Code aggregator',
+		);
+		expect(loaded?.instructions).toContain('Let Schedule nodes control cadence');
+		expect(loaded?.instructions).toContain('fortnightly workflow');
+		expect(loaded?.instructions).toContain('An omitted false branch is still a no-op branch');
+		expect(loaded?.instructions).toContain('Trace the payload field path for every final action');
+		expect(loaded?.instructions).toContain(
+			'Terminal action payloads must come from the actual upstream shape',
+		);
+		expect(loaded?.instructions).toContain(
+			'LLM Chain nodes output their\n  generated text at `$json.text`',
+		);
+		expect(loaded?.instructions).toContain('do not post from\n    `$json.response.text`');
+		expect(loaded?.instructions).toMatch(/one real failure\s+record/);
+		expect(loaded?.instructions).toContain("Do not use `$('Source List').item.json...`");
+		expect(loaded?.instructions).toContain('side-effect eligibility');
+		expect(loaded?.instructions).toContain('Filter/unmatched-output gates');
+		expect(loaded?.instructions).toContain('Verify the final user-facing outcome exists');
+		expect(loaded?.instructions).toMatch(/disabled action node does\s+not satisfy the request/);
+		expect(loaded?.instructions).toContain('After any successful direct `build-workflow` save');
+		expect(loaded?.instructions).toContain('GraphQL and many HTTP APIs return an envelope');
+		expect(loaded?.instructions).toContain('Do not pass the raw\n  trigger envelope directly');
 	});
 
 	it('loads the bundled planning skill', async () => {
@@ -152,6 +192,9 @@ describe('Instance AI runtime skills', () => {
 		expect(loaded?.instructions).toContain('verificationReadiness.status === "not_verifiable"');
 		expect(loaded?.instructions).toContain('setupRequirement.status === "required"');
 		expect(loaded?.instructions).toContain('inline setup card in the AI Assistant panel');
+		expect(loaded?.instructions).toMatch(
+			/must not\s+remove, disable, or bypass requested action nodes/,
+		);
 		expect(loaded?.instructions).toMatch(
 			/Do not ask whether to build now and set up\s+credentials later/,
 		);

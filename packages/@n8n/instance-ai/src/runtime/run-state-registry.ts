@@ -37,6 +37,7 @@ export interface SuspendedRunState<TUser = unknown> extends ActiveRunState {
 		isPlannedBuildFollowUp: true;
 		buildTaskId: string;
 		workItemId: string;
+		buildObjective?: string;
 		isSupportingWorkflowTask?: boolean;
 		savedOutcome?: WorkflowBuildOutcome;
 	};

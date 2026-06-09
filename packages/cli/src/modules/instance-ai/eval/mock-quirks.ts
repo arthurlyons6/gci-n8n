@@ -52,6 +52,7 @@ export const MOCK_QUIRKS: MockQuirk[] = [
 		guidance:
 			'OpenAI endpoints commonly seen in workflows:\n' +
 			'  * `POST /v1/audio/transcriptions` and `POST /v1/audio/translations` → JSON `{ "text": "<plausible transcript>", ... }`. The request multipart body has been redacted (you will see `__redacted: "multipart"`); derive the transcript from scenario/node hints when present, otherwise return a short generic English sentence.\n' +
+			'  * `POST /v1/responses` → JSON full Responses API envelope, never the bare generated object/string: `{ "id": "resp_...", "object": "response", "status": "completed", "model": "...", "output": [{ "id": "msg_...", "type": "message", "role": "assistant", "status": "completed", "content": [{ "type": "output_text", "text": <generated text or structured JSON value>, "annotations": [] }] }], "usage": { ... } }`. If the workflow requested JSON schema output, place the generated `{ summary, actionItems, ... }` value inside `output[0].content[0].text`; do not return `{ summary, actionItems }` at the top level.\n' +
 			'  * `POST /v1/images/generations` → JSON `{ "created": <unix>, "data": [{ "url": "https://example.invalid/img.png", "revised_prompt": "..." }] }`. If the request body has `response_format: "b64_json"`, replace `url` with `b64_json` containing a tiny base64 PNG-like blob (literal value `iVBORw0KGgo` is fine — the eval harness does not decode it).\n' +
 			'  * `GET /v1/files/{file_id}/content` → BINARY (`type: "binary"`). Use `contentType` matching the file MIME if known, else `application/octet-stream`. The metadata sibling `GET /v1/files/{file_id}` is JSON.\n' +
 			'  * Chat completions, embeddings, moderations, files-list, models-list → JSON only.',
@@ -67,9 +68,11 @@ export const MOCK_QUIRKS: MockQuirk[] = [
 			'  * `GET /drive/v3/files/{id}/export?mimeType=<mime>` → BINARY with the requested `mimeType` (Google Docs/Sheets/Slides export).\n' +
 			'  * `GET /drive/v3/files/{id}` (no `alt=media`) → JSON metadata.\n' +
 			'  * `POST /upload/drive/v3/files?uploadType=...` → JSON metadata about the uploaded file (the upload body is redacted multipart — just synthesize a plausible `{ id, name, mimeType, ... }`). NEVER binary.\n' +
-			'  * Sheets/Calendar/Gmail endpoints under `/sheets/v4`, `/calendar/v3`, `/gmail/v1` → JSON.',
+			'  * Sheets/Calendar/Gmail endpoints under `/sheets/v4`, `/calendar/v3`, `/gmail/v1` → JSON.\n' +
+			'  * Gmail message list `GET /gmail/v1/users/{userId}/messages` returns an OBJECT, not a bare array: `{ "messages": [{ "id": "...", "threadId": "..." }], "resultSizeEstimate": <number> }`. For no messages, return `{ "messages": [], "resultSizeEstimate": 0 }`.\n' +
+			'  * Gmail message detail `GET /gmail/v1/users/{userId}/messages/{id}` returns a full Message object with `id`, `threadId`, `labelIds`, `snippet`, `internalDate`, and `payload.headers` entries such as Subject, From, To, and Date. For full-message reads, include decodable body data: either `payload.body.data` or a `payload.parts[]` text/plain part whose `body.data` is a non-empty base64url string for the email body. Do not return only `payload.mimeType` or empty `body` objects. Do not return the full message objects from the list endpoint.',
 		rationale:
-			'Drive file download uses `alt=media` on the same URL as metadata; the LLM otherwise treats every `/files/{id}` as metadata JSON and breaks the download path.',
+			'Drive file download uses `alt=media` on the same URL as metadata; the LLM otherwise treats every `/files/{id}` as metadata JSON and breaks the download path. Gmail list-then-detail endpoints have different envelopes; returning a bare array or full messages from the list endpoint makes the real Gmail node emit zero items.',
 		addedAt: '2026-05-19',
 	},
 	{

@@ -792,6 +792,12 @@ export interface InstanceAiContext {
 		taskId: string;
 		workItemId: string;
 		/**
+		 * Trusted description of the build request from the host service: the
+		 * current user message for direct builds, or the planned build task spec
+		 * for planned follow-ups.
+		 */
+		buildObjective?: string;
+		/**
 		 * True for replan/checkpoint follow-ups where an approved plan already
 		 * exists and the builder may retry directly without creating a new plan.
 		 */

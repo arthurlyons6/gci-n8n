@@ -127,6 +127,95 @@ describe('createSubmitWorkflowTool — schema validation wiring', () => {
 	});
 });
 
+describe('createSubmitWorkflowTool — code node syntax validation', () => {
+	beforeEach(() => {
+		mockedValidateWorkflow.mockReset();
+		mockedValidateWorkflow.mockReturnValue({ errors: [], warnings: [] } as never);
+	});
+
+	it('rejects malformed JavaScript in Code nodes before save', async () => {
+		const createFromWorkflowJSON = vi.fn(async () => await Promise.resolve({ id: 'wf-1' }));
+		const tool = createSubmitWorkflowTool(
+			makeContext({} as InstanceAiContext['permissions'], {
+				workflowService: {
+					createFromWorkflowJSON,
+				} as unknown as InstanceAiContext['workflowService'],
+			}),
+			makeBuildSuccessWorkspace({
+				name: 'Broken code',
+				nodes: [
+					{
+						id: '1',
+						name: 'Normalize Contact Submission',
+						type: 'n8n-nodes-base.code',
+						typeVersion: 2,
+						position: [0, 0],
+						parameters: {
+							mode: 'runOnceForEachItem',
+							language: 'javaScript',
+							jsCode: "const text = 'line 1\nline 2';\nreturn { json: { text } };",
+						},
+					},
+				],
+				connections: {},
+			}),
+		);
+
+		const out = await executeTool<SubmitWorkflowOutput>(tool, {
+			filePath: 'src/workflow.ts',
+			name: 'Broken code',
+		});
+
+		expect(out.success).toBe(false);
+		expect(out.errors).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining(
+					'[INVALID_PARAMETER] (Normalize Contact Submission): Code node JavaScript failed to parse:',
+				),
+				expect.stringContaining('Code node guidance: keep embedded jsCode parseable'),
+			]),
+		);
+		expect(createFromWorkflowJSON).not.toHaveBeenCalled();
+	});
+
+	it('accepts Code nodes that use top-level await', async () => {
+		const createFromWorkflowJSON = vi.fn(async () => await Promise.resolve({ id: 'wf-1' }));
+		const tool = createSubmitWorkflowTool(
+			makeContext({} as InstanceAiContext['permissions'], {
+				workflowService: {
+					createFromWorkflowJSON,
+				} as unknown as InstanceAiContext['workflowService'],
+			}),
+			makeBuildSuccessWorkspace({
+				name: 'Async code',
+				nodes: [
+					{
+						id: '1',
+						name: 'Async Code',
+						type: 'n8n-nodes-base.code',
+						typeVersion: 2,
+						position: [0, 0],
+						parameters: {
+							mode: 'runOnceForEachItem',
+							language: 'javaScript',
+							jsCode: "const value = await Promise.resolve('ok');\nreturn { json: { value } };",
+						},
+					},
+				],
+				connections: {},
+			}),
+		);
+
+		const out = await executeTool<SubmitWorkflowOutput>(tool, {
+			filePath: 'src/workflow.ts',
+			name: 'Async code',
+		});
+
+		expect(out.success).toBe(true);
+		expect(createFromWorkflowJSON).toHaveBeenCalled();
+	});
+});
+
 describe('isTriggerNodeType', () => {
 	it.each([
 		'n8n-nodes-base.webhook',

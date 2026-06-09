@@ -14,6 +14,30 @@ export function formatWorkflowLoopGuidance(
 		case 'continue_building':
 			return `SUBMIT FAILED: ${action.reason}. Fix the workflow code and call \`submit-workflow\` again.`;
 		case 'done': {
+			if (action.verificationMode === 'mocked_credentials') {
+				return (
+					'Workflow verified successfully with mocked credentials. ' +
+					`Call \`workflows(action="setup")\` with workflowId "${action.workflowId ?? 'unknown'}" ` +
+					'to open the inline setup card in the AI Assistant panel for credentials, parameters, and triggers. ' +
+					'Do not tell the user to open the editor, use the canvas, or click a Setup button. ' +
+					'Do not call `credentials(action="setup")` or `apply-workflow-credentials` — `workflows(action="setup")` handles everything.'
+				);
+			}
+			if (action.verificationMode === 'not_verified') {
+				if (action.mockedCredentialTypes?.length || action.hasUnresolvedPlaceholders) {
+					return (
+						'Workflow built successfully, but verification did not run yet. ' +
+						`Call \`workflows(action="setup")\` with workflowId "${action.workflowId ?? 'unknown'}" ` +
+						'to open the inline setup card in the AI Assistant panel for credentials, parameters, and triggers. ' +
+						'Do not tell the user to open the editor, use the canvas, or click a Setup button. ' +
+						'Do not call `credentials(action="setup")` or `apply-workflow-credentials` — `workflows(action="setup")` handles everything.'
+					);
+				}
+				return `Workflow built successfully, but verification is still pending. Report the current status to the user.${action.workflowId ? ` Workflow ID: ${action.workflowId}` : ''}`;
+			}
+			if (action.verificationMode === 'real_credentials') {
+				return `Workflow verified successfully with real credentials. Report completion to the user.${action.workflowId ? ` Workflow ID: ${action.workflowId}` : ''}`;
+			}
 			if (action.mockedCredentialTypes?.length || action.hasUnresolvedPlaceholders) {
 				return (
 					'Workflow verified successfully with temporary mock data. ' +

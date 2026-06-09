@@ -16,6 +16,7 @@ export type PlannedBuildFollowUp = {
 	isPlannedBuildFollowUp: true;
 	buildTaskId: string;
 	workItemId: string;
+	buildObjective?: string;
 	isSupportingWorkflowTask?: boolean;
 	savedOutcome?: WorkflowBuildOutcome;
 };

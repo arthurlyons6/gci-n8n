@@ -26,6 +26,44 @@ describe('formatWorkflowLoopGuidance', () => {
 			expect(result).toContain('Workflow ID: wf-123');
 		});
 
+		it('should report real credential verification explicitly', () => {
+			const action: WorkflowLoopAction = {
+				type: 'done',
+				summary: 'All good',
+				workflowId: 'wf-real',
+				verificationMode: 'real_credentials',
+			};
+			const result = formatWorkflowLoopGuidance(action);
+			expect(result).toContain('verified successfully with real credentials');
+			expect(result).toContain('Workflow ID: wf-real');
+		});
+
+		it('should route mocked credential verification to workflow setup', () => {
+			const action: WorkflowLoopAction = {
+				type: 'done',
+				summary: 'Built with mocks',
+				workflowId: 'wf-mock',
+				mockedCredentialTypes: ['slackOAuth2Api'],
+				verificationMode: 'mocked_credentials',
+			};
+			const result = formatWorkflowLoopGuidance(action);
+			expect(result).toContain('verified successfully with mocked credentials');
+			expect(result).toContain('workflows(action="setup")');
+			expect(result).toContain('wf-mock');
+		});
+
+		it('should not claim verification when the mode is not_verified', () => {
+			const action: WorkflowLoopAction = {
+				type: 'done',
+				summary: 'Built only',
+				workflowId: 'wf-pending',
+				verificationMode: 'not_verified',
+			};
+			const result = formatWorkflowLoopGuidance(action);
+			expect(result).toContain('verification is still pending');
+			expect(result).not.toContain('verified successfully');
+		});
+
 		it('should not mention credentials when mockedCredentialTypes is undefined', () => {
 			const action: WorkflowLoopAction = {
 				type: 'done',

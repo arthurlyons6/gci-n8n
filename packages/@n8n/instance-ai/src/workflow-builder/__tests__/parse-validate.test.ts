@@ -83,6 +83,61 @@ describe('parseAndValidate', () => {
 		});
 	});
 
+	it('collects malformed Code node JavaScript as a blocking validation issue', () => {
+		const builder = makeBuilder({
+			toJSON: vi.fn().mockReturnValue({
+				name: 'Broken code workflow',
+				nodes: [
+					{
+						name: 'Normalize Contact Submission',
+						type: 'n8n-nodes-base.code',
+						parameters: {
+							language: 'javaScript',
+							jsCode: "const text = 'line 1\nline 2';\nreturn { json: { text } };",
+						},
+					},
+				],
+				connections: {},
+			}),
+		});
+		mockedParseWorkflowCodeToBuilder.mockReturnValue(builder as never);
+
+		const result = parseAndValidate('code');
+
+		const codeWarning = result.warnings.find(
+			(warning) => warning.nodeName === 'Normalize Contact Submission',
+		);
+		expect(codeWarning).toMatchObject({
+			code: 'INVALID_PARAMETER',
+			nodeName: 'Normalize Contact Submission',
+		});
+		expect(codeWarning?.message).toContain('Code node JavaScript failed to parse:');
+	});
+
+	it('accepts Code node JavaScript with top-level await and return', () => {
+		const builder = makeBuilder({
+			toJSON: vi.fn().mockReturnValue({
+				name: 'Async code workflow',
+				nodes: [
+					{
+						name: 'Async Code',
+						type: 'n8n-nodes-base.code',
+						parameters: {
+							language: 'javaScript',
+							jsCode: "const value = await Promise.resolve('ok');\nreturn { json: { value } };",
+						},
+					},
+				],
+				connections: {},
+			}),
+		});
+		mockedParseWorkflowCodeToBuilder.mockReturnValue(builder as never);
+
+		const result = parseAndValidate('code');
+
+		expect(result.warnings).toEqual([]);
+	});
+
 	it('combines graph and schema validation issues', () => {
 		const builder = makeBuilder({
 			validate: vi.fn().mockReturnValue({

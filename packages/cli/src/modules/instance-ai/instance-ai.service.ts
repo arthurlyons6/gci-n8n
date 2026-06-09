@@ -191,6 +191,7 @@ const SANDBOX_NAME_MAX_LEN = 63;
 const SANDBOX_LABEL_MAX_LEN = 63;
 const NAME_PREFIX_SLUG_MAX_LEN = 24;
 const DEFAULT_SANDBOX_TTL_MS = 15 * 60 * 1000;
+const SANDBOX_SNAPSHOT_FALLBACK_ENV = 'N8N_INSTANCE_AI_SANDBOX_SNAPSHOT_FALLBACK';
 
 function slugifySandboxName(value: string, maxLen: number): string {
 	const slug = value
@@ -251,6 +252,11 @@ function withThreadScopedSandboxIdentity(config: SandboxConfig, threadId: string
 			...config.labels,
 		},
 	};
+}
+
+function useSandboxSnapshotFallback(): boolean {
+	const raw = process.env[SANDBOX_SNAPSHOT_FALLBACK_ENV]?.trim().toLowerCase();
+	return raw !== '0' && raw !== 'false';
 }
 
 function getUserFacingErrorMessage(error: unknown): string {
@@ -867,7 +873,7 @@ export class InstanceAiService {
 		const sandbox = await createSandbox(config, {
 			logger: this.logger,
 			errorReporter: this.errorReporter,
-			useSnapshotFallback: true,
+			useSnapshotFallback: useSandboxSnapshotFallback(),
 		});
 		const workspace = createWorkspace(sandbox);
 		if (!sandbox || !workspace) return undefined;
@@ -3715,6 +3721,7 @@ export class InstanceAiService {
 					isPlannedBuildFollowUp: true,
 					buildTaskId: task.id,
 					workItemId,
+					buildObjective: task.spec,
 					isSupportingWorkflowTask: task.isSupportingWorkflow === true,
 				};
 
@@ -3958,6 +3965,7 @@ export class InstanceAiService {
 					runId,
 					taskId: plannedBuild.buildTaskId,
 					workItemId: plannedBuild.workItemId,
+					buildObjective: plannedBuild.buildObjective,
 					allowPostPlanWorkflowCreate: true,
 					isSupportingWorkflowTask: plannedBuild.isSupportingWorkflowTask,
 					plannedTaskService,
@@ -3972,6 +3980,7 @@ export class InstanceAiService {
 					runId,
 					taskId: `build-${runId}`,
 					workItemId: `wi_${nanoid(8)}`,
+					buildObjective: message,
 					allowPostPlanWorkflowCreate: isPostPlanFollowUp,
 					workflowTaskService: workflowTasks,
 				};

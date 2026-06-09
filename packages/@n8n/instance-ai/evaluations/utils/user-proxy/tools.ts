@@ -129,12 +129,26 @@ function parseNodeParametersJson(
 ): Record<string, Record<string, unknown>> {
 	try {
 		const parsed: unknown = JSON.parse(json);
-		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-			return parsed as Record<string, Record<string, unknown>>;
+		if (!isPlainRecord(parsed)) {
+			onFailure?.(json, new Error('parsed value is not a plain object'));
+			return {};
 		}
-		onFailure?.(json, new Error('parsed value is not a plain object'));
+
+		const nodeParameters: Record<string, Record<string, unknown>> = {};
+		for (const [nodeName, parameters] of Object.entries(parsed)) {
+			if (isPlainRecord(parameters)) {
+				nodeParameters[nodeName] = parameters;
+				continue;
+			}
+			onFailure?.(json, new Error(`parameters for node "${nodeName}" are not a plain object`));
+		}
+		return nodeParameters;
 	} catch (error) {
 		onFailure?.(json, error);
 	}
 	return {};
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

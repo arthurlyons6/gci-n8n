@@ -81,6 +81,8 @@ describe('findMockQuirks (real registry)', () => {
 			const guidance = findMockQuirks('Openai', 'POST', '/v1/audio/transcriptions');
 			expect(guidance.length).toBeGreaterThan(0);
 			expect(guidance.join('\n')).toMatch(/transcriptions/);
+			expect(guidance.join('\n')).toMatch(/\/v1\/responses/);
+			expect(guidance.join('\n')).toMatch(/full Responses API envelope/);
 			expect(guidance.join('\n')).toMatch(/images\/generations/);
 		});
 
@@ -88,6 +90,17 @@ describe('findMockQuirks (real registry)', () => {
 			const guidance = findMockQuirks('Googleapis', 'GET', '/drive/v3/files/abc');
 			expect(guidance.length).toBeGreaterThan(0);
 			expect(guidance.join('\n')).toMatch(/alt=media/);
+		});
+
+		it('returns Googleapis guidance for Gmail list and detail response envelopes', () => {
+			const guidance = findMockQuirks('Googleapis', 'GET', '/gmail/v1/users/me/messages');
+			const joined = guidance.join('\n');
+			expect(joined).toMatch(/Gmail message list/);
+			expect(joined).toMatch(/messages/);
+			expect(joined).toMatch(/Gmail message detail/);
+			expect(joined).toMatch(/body\.data/);
+			expect(joined).toMatch(/base64url/);
+			expect(joined).toMatch(/Do not return the full message objects from the list endpoint/);
 		});
 
 		it('returns Slack guidance that steers AWAY from binary for files endpoints', () => {

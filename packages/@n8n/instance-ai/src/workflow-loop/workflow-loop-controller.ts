@@ -26,6 +26,7 @@ import type {
 	WorkflowLoopAction,
 	WorkflowLoopSource,
 	WorkflowLoopState,
+	WorkflowVerificationMode,
 	VerificationResult,
 } from './workflow-loop-state';
 
@@ -57,6 +58,12 @@ interface TransitionResult {
 	state: WorkflowLoopState;
 	action: WorkflowLoopAction;
 	attempt: AttemptRecord;
+}
+
+function verificationModeFromMockedCredentials(
+	mockedCredentialTypes: string[] | undefined,
+): WorkflowVerificationMode {
+	return mockedCredentialTypes?.length ? 'mocked_credentials' : 'real_credentials';
 }
 
 export function handleBuildOutcome(
@@ -189,6 +196,7 @@ export function handleBuildOutcome(
 				summary: outcome.summary,
 				mockedCredentialTypes,
 				hasUnresolvedPlaceholders: updatedState.hasUnresolvedPlaceholders,
+				verificationMode: outcome.verificationMode ?? 'not_verified',
 			},
 			attempt,
 		};
@@ -266,6 +274,9 @@ export function handleVerificationVerdict(
 					summary: verdict.summary,
 					mockedCredentialTypes: normalizedState.mockedCredentialTypes,
 					hasUnresolvedPlaceholders: normalizedState.hasUnresolvedPlaceholders,
+					verificationMode: verificationModeFromMockedCredentials(
+						normalizedState.mockedCredentialTypes,
+					),
 				},
 				attempt,
 			};
@@ -287,6 +298,7 @@ export function handleVerificationVerdict(
 					summary: verdict.summary,
 					mockedCredentialTypes: normalizedState.mockedCredentialTypes,
 					hasUnresolvedPlaceholders: normalizedState.hasUnresolvedPlaceholders,
+					verificationMode: 'not_verified',
 				},
 				attempt,
 			};

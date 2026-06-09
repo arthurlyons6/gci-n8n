@@ -7,7 +7,9 @@
  */
 
 import { parseWorkflowCodeToBuilder, validateWorkflow } from '@n8n/workflow-sdk';
+import type { WorkflowJSON } from '@n8n/workflow-sdk';
 import type { INodeTypes } from 'n8n-workflow';
+import { Script } from 'node:vm';
 
 import { stripImportStatements } from './extract-code';
 import type { ParseAndValidateResult, ValidationWarning } from './types';
@@ -41,6 +43,42 @@ function collectValidationIssues(
 			nodeName: issue.nodeName,
 		});
 	}
+}
+
+const CODE_NODE_TYPE = 'n8n-nodes-base.code';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function validateCodeNodeSyntax(json: WorkflowJSON): ValidationWarning[] {
+	const warnings: ValidationWarning[] = [];
+
+	for (const node of json.nodes ?? []) {
+		if (node.type !== CODE_NODE_TYPE) continue;
+
+		const parameters = isRecord(node.parameters) ? node.parameters : undefined;
+		const language = typeof parameters?.language === 'string' ? parameters.language : undefined;
+		const jsCode = typeof parameters?.jsCode === 'string' ? parameters.jsCode : undefined;
+
+		if (!jsCode) continue;
+		if (language && language !== 'javaScript') continue;
+
+		try {
+			// Wrap in an async function so Code node source with top-level await or
+			// return statements still parses like it does at n8n runtime.
+			new Script(`(async () => {\n${jsCode}\n})();`);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Unknown syntax error';
+			warnings.push({
+				code: 'INVALID_PARAMETER',
+				nodeName: node.name,
+				message: `Code node JavaScript failed to parse: ${message}`,
+			});
+		}
+	}
+
+	return warnings;
 }
 
 /**
@@ -86,6 +124,7 @@ export function parseAndValidate(
 		const schemaValidation = validateWorkflow(json, { nodeTypesProvider, strictMode: true });
 		collectValidationIssues(schemaValidation.errors, allWarnings);
 		collectValidationIssues(schemaValidation.warnings, allWarnings);
+		allWarnings.push(...validateCodeNodeSyntax(json));
 
 		return { workflow: json, warnings: allWarnings };
 	} catch (error) {

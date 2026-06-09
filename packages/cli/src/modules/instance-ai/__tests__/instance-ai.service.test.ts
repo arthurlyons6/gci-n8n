@@ -163,6 +163,9 @@ import {
 
 import { InstanceAiService } from '../instance-ai.service';
 
+const SANDBOX_SNAPSHOT_FALLBACK_ENV = 'N8N_INSTANCE_AI_SANDBOX_SNAPSHOT_FALLBACK';
+const originalSandboxSnapshotFallbackEnv = process.env[SANDBOX_SNAPSHOT_FALLBACK_ENV];
+
 type ServiceInternals = {
 	pendingCheckpointReentries: Map<string, Set<string>>;
 	queuePendingCheckpointReentry: (threadId: string, checkpointTaskId: string) => void;
@@ -841,6 +844,7 @@ function makeAgentTree(): InstanceAiAgentNode {
 
 describe('InstanceAiService — runtime workspace setup', () => {
 	beforeEach(() => {
+		delete process.env[SANDBOX_SNAPSHOT_FALLBACK_ENV];
 		jest.clearAllMocks();
 		(createSandbox as jest.Mock).mockReset();
 		(createWorkspace as jest.Mock).mockReset();
@@ -860,6 +864,14 @@ describe('InstanceAiService — runtime workspace setup', () => {
 			},
 			loadSkill: jest.fn(),
 		}));
+	});
+
+	afterAll(() => {
+		if (originalSandboxSnapshotFallbackEnv === undefined) {
+			delete process.env[SANDBOX_SNAPSHOT_FALLBACK_ENV];
+		} else {
+			process.env[SANDBOX_SNAPSHOT_FALLBACK_ENV] = originalSandboxSnapshotFallbackEnv;
+		}
 	});
 
 	it('serializes workspace creation for concurrent calls on the same thread', async () => {
@@ -906,6 +918,32 @@ describe('InstanceAiService — runtime workspace setup', () => {
 		expect(workspace.init).toHaveBeenCalledTimes(1);
 		expect(setupSandboxWorkspace).toHaveBeenCalledTimes(1);
 		expect(service.sandboxCreations.size).toBe(0);
+	});
+
+	it('can disable snapshot fallback for local sandbox creation', async () => {
+		process.env[SANDBOX_SNAPSHOT_FALLBACK_ENV] = 'false';
+		const service = Object.create(
+			InstanceAiService.prototype,
+		) as unknown as WorkspaceServiceInternals;
+		service.sandboxes = new Map();
+		service.sandboxCreations = new Map();
+		service.resolveSandboxConfig = jest.fn(async (_user: User) => daytonaSandboxConfig);
+
+		const sandbox = { id: 'sandbox-1' };
+		const workspace = {
+			init: jest.fn(async () => {}),
+			destroy: jest.fn(async () => {}),
+		};
+		(createSandbox as jest.Mock).mockResolvedValue(sandbox);
+		(createWorkspace as jest.Mock).mockReturnValue(workspace);
+		(setupSandboxWorkspace as jest.Mock).mockResolvedValue(undefined);
+
+		await service.getOrCreateWorkspace('thread-1', fakeUser, {} as InstanceAiContext);
+
+		expect(createSandbox).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.objectContaining({ useSnapshotFallback: false }),
+		);
 	});
 
 	it('keeps the default runtime sandbox TTL aligned with provider auto-stop', () => {

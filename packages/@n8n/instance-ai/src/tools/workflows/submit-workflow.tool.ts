@@ -19,7 +19,7 @@ import { stripStaleCredentialsFromWorkflow } from './setup-workflow.service';
 import { getReferencedWorkflowIds, isTriggerNodeType } from './workflow-json-utils';
 import type { InstanceAiContext } from '../../types';
 import type { ValidationWarning } from '../../workflow-builder';
-import { partitionWarnings } from '../../workflow-builder';
+import { partitionWarnings, validateCodeNodeSyntax } from '../../workflow-builder';
 import { createRemediation } from '../../workflow-loop/remediation';
 import type { RemediationMetadata } from '../../workflow-loop/workflow-loop-state';
 import {
@@ -230,13 +230,25 @@ function enhanceValidationErrors(errors: string[]): string[] {
 	const needsHtmlGuidance = errors.some(
 		(error) => error.includes('[MISSING_EXPRESSION_PREFIX]') && error.includes('parameter "html"'),
 	);
+	const needsCodeNodeGuidance = errors.some((error) =>
+		error.includes('Code node JavaScript failed to parse'),
+	);
 
-	if (!needsHtmlGuidance) return errors;
+	if (!needsHtmlGuidance && !needsCodeNodeGuidance) return errors;
 
-	return [
-		...errors,
-		'HTML node guidance: do not embed bare {{ $json... }} inside a large HTML string. Build the final HTML in a Code node and inject serialized/base64 data there, or make the entire parameter an expression string starting with =.',
-	];
+	const enhanced = [...errors];
+	if (needsHtmlGuidance) {
+		enhanced.push(
+			'HTML node guidance: do not embed bare {{ $json... }} inside a large HTML string. Build the final HTML in a Code node and inject serialized/base64 data there, or make the entire parameter an expression string starting with =.',
+		);
+	}
+	if (needsCodeNodeGuidance) {
+		enhanced.push(
+			'Code node guidance: keep embedded jsCode parseable after saving. Do not use String.raw in SDK code; avoid raw newlines inside quoted strings, nested template literals, and escape-heavy regex literals. Prefer const LF = String.fromCharCode(10), arrays joined with LF, and simple string helpers.',
+		);
+	}
+
+	return enhanced;
 }
 
 function enhanceBuildErrors(errors: string[]): string[] {
@@ -577,6 +589,7 @@ export function createSubmitWorkflowTool(
 						nodeName: issue.nodeName,
 					});
 				}
+				allWarnings.push(...validateCodeNodeSyntax(json));
 
 				const { errors, informational } = partitionWarnings(allWarnings);
 

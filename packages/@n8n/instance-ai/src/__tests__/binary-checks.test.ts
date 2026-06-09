@@ -81,6 +81,61 @@ describe('binary checks', () => {
 		expect(check?.comment).toContain('EmptySet');
 	});
 
+	it('fails no_empty_set_nodes when Set assignments are missing value', async () => {
+		const workflow = makeWorkflow({
+			nodes: [
+				{ name: 'Webhook', type: 'n8n-nodes-base.webhook' },
+				{
+					name: 'Tag Channel',
+					type: 'n8n-nodes-base.set',
+					typeVersion: 3.4,
+					parameters: {
+						assignments: {
+							assignments: [{ name: 'channel', type: 'string', stringValue: '#general' }],
+						},
+					},
+				},
+			],
+			connections: {
+				Webhook: { main: [[{ node: 'Tag Channel', type: 'main', index: 0 }]] },
+			},
+		});
+		const { feedback } = await runBinaryChecks(workflow, ctx);
+		const check = feedback.find((f) => f.metric === 'no_empty_set_nodes');
+
+		expect(check?.score).toBe(0);
+		expect(check?.comment).toContain('missing "value"');
+		expect(check?.comment).toContain('Tag Channel');
+	});
+
+	it('fails no_empty_set_nodes when recent Set nodes use legacy fields.values', async () => {
+		const workflow = makeWorkflow({
+			nodes: [
+				{ name: 'Webhook', type: 'n8n-nodes-base.webhook' },
+				{
+					name: 'Normalize Reading',
+					type: 'n8n-nodes-base.set',
+					typeVersion: 3.4,
+					parameters: {
+						mode: 'manual',
+						fields: {
+							values: [{ name: 'city', type: 'stringValue', stringValue: '={{ $json.city }}' }],
+						},
+					},
+				},
+			],
+			connections: {
+				Webhook: { main: [[{ node: 'Normalize Reading', type: 'main', index: 0 }]] },
+			},
+		});
+		const { feedback } = await runBinaryChecks(workflow, ctx);
+		const check = feedback.find((f) => f.metric === 'no_empty_set_nodes');
+
+		expect(check?.score).toBe(0);
+		expect(check?.comment).toContain('legacy fields.values');
+		expect(check?.comment).toContain('Normalize Reading');
+	});
+
 	it('fails no_disabled_nodes when a node is disabled', async () => {
 		const workflow = makeWorkflow({
 			nodes: [

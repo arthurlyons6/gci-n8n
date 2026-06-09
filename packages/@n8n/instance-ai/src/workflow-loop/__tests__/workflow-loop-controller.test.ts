@@ -99,6 +99,9 @@ describe('handleBuildOutcome', () => {
 		expect(next.phase).toBe('done');
 		expect(next.status).toBe('completed');
 		expect(action.type).toBe('done');
+		if (action.type === 'done') {
+			expect(action.verificationMode).toBe('not_verified');
+		}
 	});
 
 	it('keeps pre-save code-fixable submit failures active before budget is exhausted', () => {
@@ -416,6 +419,25 @@ describe('handleVerificationVerdict', () => {
 		expect(next.status).toBe('completed');
 		expect(next.lastExecutionId).toBe('exec_1');
 		expect(action.type).toBe('done');
+		if (action.type === 'done') {
+			expect(action.verificationMode).toBe('real_credentials');
+		}
+	});
+
+	it('marks verified workflows with mocked credentials as mocked verification', () => {
+		const state = makeState({
+			phase: 'verifying',
+			workflowId: 'wf_123',
+			mockedCredentialTypes: ['slackOAuth2Api'],
+		});
+		const verdict = makeVerdict({ verdict: 'verified', executionId: 'exec_1' });
+
+		const { action } = handleVerificationVerdict(state, [], verdict);
+
+		expect(action.type).toBe('done');
+		if (action.type === 'done') {
+			expect(action.verificationMode).toBe('mocked_credentials');
+		}
 	});
 
 	it('transitions to done on trigger_only', () => {
@@ -426,6 +448,9 @@ describe('handleVerificationVerdict', () => {
 
 		expect(next.phase).toBe('done');
 		expect(action.type).toBe('done');
+		if (action.type === 'done') {
+			expect(action.verificationMode).toBe('not_verified');
+		}
 	});
 
 	it('passes through hasUnresolvedPlaceholders from state on verified', () => {
