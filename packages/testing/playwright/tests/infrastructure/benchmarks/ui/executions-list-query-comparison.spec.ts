@@ -30,7 +30,7 @@ import { benchConfig } from '../../../../playwright-projects';
 import type { ApiHelpers } from '../../../../services/api-helper';
 import { bulkSeedExecutions } from '../harness/bulk-seed-executions';
 
-const ITERATIONS = 100;
+const ITERATIONS = 50;
 const WORKFLOWS_IN_PROJECT = 400;
 const PRESEEDED_EXECUTIONS = 1_000_000;
 const CREATE_BATCH_SIZE = 20;
@@ -206,11 +206,12 @@ function httpSummarySection(httpLat: number[], setup: { iterations: number }): s
 	const col = (s: ReturnType<typeof calcStats>) =>
 		`| V2 (fix, current code) | ${fmt(s.avg)} | ${fmt(s.p50)} | ${fmt(s.p75)} | ${fmt(s.p90)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.max)} | ${fmt(s.min)} | ${fmt(s.stddev)} | ${fmtPct(s.cv)} |`;
 
-	return `### HTTP E2E — GET /rest/executions (V2, fix applied, ${setup.iterations} iterations)
+	return `### HTTP E2E — GET /rest/executions (V2, fix applied, ${setup.iterations} cold-cache iterations)
 
 Full stack: HTTP → Express → TypeORM → Postgres → JSON response.
 \`GET /rest/executions?limit=10\` calls \`findRangeWithCount()\` — runs both getMany + COUNT(*) per request.
 Auth: project:admin user (same scope as CrowdStrike scenario).
+**Cold cache:** Postgres restarted before every iteration (same condition as SQL measurements).
 
 | Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
 |---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
@@ -335,7 +336,7 @@ test.describe(
 			services,
 			n8n,
 		}, testInfo) => {
-			// 4 × 100 iterations × ~10 s per restart + ~5 min seeding ≈ 75 min total.
+			// 4 × 50 SQL iterations × ~10 s per restart + 50 HTTP + ~5 min seeding ≈ 40 min total.
 			testInfo.setTimeout(120 * 60 * 1000);
 
 			// ── Setup ────────────────────────────────────────────────────────
@@ -487,14 +488,14 @@ test.describe(
 				console.log(`  [IN COUNT ${i + 1}/${ITERATIONS}] ${countInLat[i]!.toFixed(1)} ms`);
 			}
 
-			// ── HTTP E2E — project:admin hits GET /rest/executions ────────────
-			// Uses the same user + scope as the CrowdStrike scenario.
-			// Measures V2 (fix) only — both SQL variants run against the same
-			// patched codebase; HTTP just confirms the full stack is responsive.
+			// ── HTTP E2E — project:admin hits GET /rest/executions (cold cache) ──
+			// Postgres restarted before every iteration — same cold-cache condition
+			// as the SQL measurements above. Measures V2 (fix, current code).
 			const adminApi = await n8n.api.createApiForUser(ctx.admin);
 			const httpLat: number[] = [];
-			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions`);
+			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions (cold cache)`);
 			for (let i = 0; i < ITERATIONS; i++) {
+				await services.postgres.restart();
 				const t0 = performance.now();
 				const res = await adminApi.request.get('/rest/executions?limit=10&includeData=false');
 				httpLat.push(performance.now() - t0);
