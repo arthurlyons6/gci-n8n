@@ -497,38 +497,36 @@ test.describe(
 				console.log(`  [IN COUNT ${i + 1}/${ITERATIONS}] ${countInLat[i]!.toFixed(1)} ms`);
 			}
 
-			// ── HTTP E2E — project:admin hits GET /rest/executions (cold cache) ──
-			// Postgres restarted before every iteration — cold Postgres shared_buffers.
-			// After restart: poll /healthz until n8n reconnects (up to 30s), then
-			// measure the first real request. This isolates query latency from
-			// n8n reconnect time while still ensuring cold Postgres cache.
-			const httpLat: number[] = [];
-			console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions (cold cache)`);
-			for (let i = 0; i < ITERATIONS; i++) {
-				await services.postgres.restart();
-				// Wait for n8n to reconnect to Postgres (max 30s).
-				// /healthz is a liveness probe and returns 200 even when DB is not
-				// ready. Poll the actual endpoint until it returns non-503.
-				let ready = false;
-				for (let attempt = 0; attempt < 60 && !ready; attempt++) {
-					const probe = await adminApi.request.get('/rest/executions?limit=1&includeData=false');
-					if (probe.status() !== 503) {
-						ready = true;
-					} else {
-						await new Promise((r) => setTimeout(r, 500));
-					}
-				}
-				if (!ready) {
-					console.warn(`  [HTTP ${i + 1}/${ITERATIONS}] n8n not ready after 30s — skipping`);
-					continue;
-				}
-				const t0 = performance.now();
-				const res = await adminApi.request.get('/rest/executions?limit=10&includeData=false');
-				httpLat.push(performance.now() - t0);
-				if (!res.ok()) {
-					console.warn(`  [HTTP ${i + 1}/${ITERATIONS}] status=${res.status()}`);
+			// ── HTTP E2E — project:admin hits GET /rest/executions (warm cache) ──
+			// No per-iteration restart — after 200 SQL restarts TypeORM pool needs to
+			// stabilise. SQL measurements above already capture cold-cache query latency.
+			// HTTP here measures full-stack overhead: HTTP → Express → TypeORM → Postgres.
+			// Wait for n8n to be ready first (pool may be recovering from SQL loops).
+			console.log(`[HTTP] Waiting for n8n to be ready after SQL loops...`);
+			let n8nReady = false;
+			for (let attempt = 0; attempt < 120 && !n8nReady; attempt++) {
+				const probe = await adminApi.request.get('/rest/executions?limit=1&includeData=false');
+				if (probe.status() !== 503) {
+					n8nReady = true;
+					console.log(`[HTTP] n8n ready after ${attempt + 1} attempts`);
 				} else {
-					console.log(`  [HTTP ${i + 1}/${ITERATIONS}] ${httpLat[i]!.toFixed(1)} ms`);
+					await new Promise((r) => setTimeout(r, 1000));
+				}
+			}
+			const httpLat: number[] = [];
+			if (!n8nReady) {
+				console.warn(`[HTTP] n8n not ready after 120s — skipping HTTP measurements`);
+			} else {
+				console.log(`[MEASURE] ${ITERATIONS} iterations — HTTP GET /rest/executions`);
+				for (let i = 0; i < ITERATIONS; i++) {
+					const t0 = performance.now();
+					const res = await adminApi.request.get('/rest/executions?limit=10&includeData=false');
+					httpLat.push(performance.now() - t0);
+					if (!res.ok()) {
+						console.warn(`  [HTTP ${i + 1}/${ITERATIONS}] status=${res.status()}`);
+					} else {
+						console.log(`  [HTTP ${i + 1}/${ITERATIONS}] ${httpLat[i]!.toFixed(1)} ms`);
+					}
 				}
 			}
 
