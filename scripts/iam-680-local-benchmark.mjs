@@ -103,10 +103,10 @@ function allRunsSummary(countExists, countIn, getManyExists, getManyIn) {
 
 | Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
 |---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
-${col(ce,  'COUNT EXISTS (V1)')}
-${col(ci,  'COUNT IN (V2)')}
-${col(gme, 'getMany EXISTS (V1)')}
-${col(gmi, 'getMany IN (V2)')}
+${col(ce,  'COUNT EXISTS (V1, actual master)')}
+${col(ci,  'COUNT IN (V2, fix)')}
+${col(gme, 'getMany EXISTS (V1, actual master)')}
+${col(gmi, 'getMany IN (V2, fix)')}
 
 **Delta (V1 → V2):**
 
