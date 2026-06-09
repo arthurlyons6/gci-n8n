@@ -101,32 +101,45 @@ function allRunsSummary(countExists, countIn, getManyExists, getManyIn) {
 
   return `### All-runs summary
 
+#### COUNT(*) — no LIMIT (the real bottleneck)
+
 | Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
 |---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
-${col(ce,  'COUNT EXISTS (V1, actual master)')}
-${col(ci,  'COUNT IN (V2, fix)')}
-${col(gme, 'getMany EXISTS (V1, actual master)')}
-${col(gmi, 'getMany IN (V2, fix)')}
+${col(ce,  'V1 (actual master)')}
+${col(ci,  'V2 (fix)')}
 
-**Delta (V1 → V2):**
+| Metric | Δ (V1 → V2) |
+|--------|-------------|
+| avg    | ${delta(ce.avg, ci.avg)} |
+| p50    | ${delta(ce.p50, ci.p50)} |
+| p75    | ${delta(ce.p75, ci.p75)} |
+| p90    | ${delta(ce.p90, ci.p90)} |
+| p95    | ${delta(ce.p95, ci.p95)} |
+| p99    | ${delta(ce.p99, ci.p99)} |
+| max    | ${delta(ce.max, ci.max)} |
+| stddev | ${delta(ce.stddev, ci.stddev)} |
 
-| Metric | COUNT Δ | getMany Δ |
-|--------|---------|-----------|
-| avg    | ${delta(ce.avg, ci.avg)} | ${delta(gme.avg, gmi.avg)} |
-| p50    | ${delta(ce.p50, ci.p50)} | ${delta(gme.p50, gmi.p50)} |
-| p75    | ${delta(ce.p75, ci.p75)} | ${delta(gme.p75, gmi.p75)} |
-| p90    | ${delta(ce.p90, ci.p90)} | ${delta(gme.p90, gmi.p90)} |
-| p95    | ${delta(ce.p95, ci.p95)} | ${delta(gme.p95, gmi.p95)} |
-| p99    | ${delta(ce.p99, ci.p99)} | ${delta(gme.p99, gmi.p99)} |
-| max    | ${delta(ce.max, ci.max)} | ${delta(gme.max, gmi.max)} |
-| stddev | ${delta(ce.stddev, ci.stddev)} | ${delta(gme.stddev, gmi.stddev)} |
+Mann-Whitney U: ${mwC.u.toFixed(0)} — P(V1 > V2) = ${fmtPct(mwC.prob)} — ${mwInterp(mwC.prob)}
 
-**Mann-Whitney U — P(EXISTS > IN):**
+#### getMany (LIMIT 10)
 
-| Query | U | P(EXISTS > IN) | Interpretation |
-|-------|---|----------------|----------------|
-| COUNT(*) | ${mwC.u.toFixed(0)} | ${fmtPct(mwC.prob)} | ${mwInterp(mwC.prob)} |
-| getMany  | ${mwG.u.toFixed(0)} | ${fmtPct(mwG.prob)} | ${mwInterp(mwG.prob)} |`;
+| Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
+|---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
+${col(gme, 'V1 (actual master)')}
+${col(gmi, 'V2 (fix)')}
+
+| Metric | Δ (V1 → V2) |
+|--------|-------------|
+| avg    | ${delta(gme.avg, gmi.avg)} |
+| p50    | ${delta(gme.p50, gmi.p50)} |
+| p75    | ${delta(gme.p75, gmi.p75)} |
+| p90    | ${delta(gme.p90, gmi.p90)} |
+| p95    | ${delta(gme.p95, gmi.p95)} |
+| p99    | ${delta(gme.p99, gmi.p99)} |
+| max    | ${delta(gme.max, gmi.max)} |
+| stddev | ${delta(gme.stddev, gmi.stddev)} |
+
+Mann-Whitney U: ${mwG.u.toFixed(0)} — P(V1 > V2) = ${fmtPct(mwG.prob)} — ${mwInterp(mwG.prob)}`;
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────

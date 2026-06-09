@@ -151,34 +151,54 @@ function allRunsSummaryTable(
 	const col = (s: ReturnType<typeof calcStats>, label: string) =>
 		`| ${label} | ${fmt(s.avg)} | ${fmt(s.p50)} | ${fmt(s.p75)} | ${fmt(s.p90)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.max)} | ${fmt(s.min)} | ${fmt(s.stddev)} | ${fmtPct(s.cv)} |`;
 
+	const mwInterp = (p: number) =>
+		p > 0.6
+			? '✅ IN faster, statistically confident'
+			: p > 0.5
+				? '⚠️ IN slightly faster, marginal'
+				: '❌ No significant difference';
+
 	return `### All-runs summary
+
+#### COUNT(*) — no LIMIT (the real bottleneck)
 
 | Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
 |---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
-${col(ce, 'COUNT EXISTS (V1, actual master)')}
-${col(ci, 'COUNT IN (V2, fix)')}
-${col(gme, 'getMany EXISTS (V1, actual master)')}
-${col(gmi, 'getMany IN (V2, fix)')}
+${col(ce, 'V1 (actual master)')}
+${col(ci, 'V2 (fix)')}
 
-**Delta (V1 → V2):**
+| Metric | Δ (V1 → V2) |
+|--------|-------------|
+| avg    | ${delta(ce.avg, ci.avg)} |
+| p50    | ${delta(ce.p50, ci.p50)} |
+| p75    | ${delta(ce.p75, ci.p75)} |
+| p90    | ${delta(ce.p90, ci.p90)} |
+| p95    | ${delta(ce.p95, ci.p95)} |
+| p99    | ${delta(ce.p99, ci.p99)} |
+| max    | ${delta(ce.max, ci.max)} |
+| stddev | ${delta(ce.stddev, ci.stddev)} |
 
-| Metric | COUNT Δ | getMany Δ |
-|--------|---------|-----------|
-| avg    | ${delta(ce.avg, ci.avg)} | ${delta(gme.avg, gmi.avg)} |
-| p50    | ${delta(ce.p50, ci.p50)} | ${delta(gme.p50, gmi.p50)} |
-| p75    | ${delta(ce.p75, ci.p75)} | ${delta(gme.p75, gmi.p75)} |
-| p90    | ${delta(ce.p90, ci.p90)} | ${delta(gme.p90, gmi.p90)} |
-| p95    | ${delta(ce.p95, ci.p95)} | ${delta(gme.p95, gmi.p95)} |
-| p99    | ${delta(ce.p99, ci.p99)} | ${delta(gme.p99, gmi.p99)} |
-| max    | ${delta(ce.max, ci.max)} | ${delta(gme.max, gmi.max)} |
-| stddev | ${delta(ce.stddev, ci.stddev)} | ${delta(gme.stddev, gmi.stddev)} |
+Mann-Whitney U: ${mwCount.u.toFixed(0)} — P(V1 > V2) = ${fmtPct(mwCount.prob)} — ${mwInterp(mwCount.prob)}
 
-**Mann-Whitney U (probability that EXISTS > IN):**
+#### getMany (LIMIT 10)
 
-| Query | U | P(EXISTS > IN) | Interpretation |
-|-------|---|----------------|----------------|
-| COUNT(*) | ${mwCount.u.toFixed(0)} | ${fmtPct(mwCount.prob)} | ${mwCount.prob > 0.6 ? '✅ IN is faster with statistical confidence' : mwCount.prob > 0.5 ? '⚠️ IN is slightly faster, marginal' : '❌ No significant difference'} |
-| getMany  | ${mwGetMany.u.toFixed(0)} | ${fmtPct(mwGetMany.prob)} | ${mwGetMany.prob > 0.6 ? '✅ IN is faster with statistical confidence' : mwGetMany.prob > 0.5 ? '⚠️ IN is slightly faster, marginal' : '❌ No significant difference'} |`;
+| Variant | avg | p50 | p75 | p90 | p95 | p99 | max | min | stddev | CV |
+|---------|-----|-----|-----|-----|-----|-----|-----|-----|--------|-----|
+${col(gme, 'V1 (actual master)')}
+${col(gmi, 'V2 (fix)')}
+
+| Metric | Δ (V1 → V2) |
+|--------|-------------|
+| avg    | ${delta(gme.avg, gmi.avg)} |
+| p50    | ${delta(gme.p50, gmi.p50)} |
+| p75    | ${delta(gme.p75, gmi.p75)} |
+| p90    | ${delta(gme.p90, gmi.p90)} |
+| p95    | ${delta(gme.p95, gmi.p95)} |
+| p99    | ${delta(gme.p99, gmi.p99)} |
+| max    | ${delta(gme.max, gmi.max)} |
+| stddev | ${delta(gme.stddev, gmi.stddev)} |
+
+Mann-Whitney U: ${mwGetMany.u.toFixed(0)} — P(V1 > V2) = ${fmtPct(mwGetMany.prob)} — ${mwInterp(mwGetMany.prob)}`;
 }
 
 function renderMarkdown(
