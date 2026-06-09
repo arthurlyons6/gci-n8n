@@ -76,8 +76,8 @@ function summaryTable(
 ): string {
 	const delta = (e: number, i: number) =>
 		e > 0 ? `**${((1 - i / e) * 100).toFixed(0)}% faster**` : '—';
-	return `| Metric | EXISTS (actual master) | IN (after fix) | Δ |
-|--------|----------------------|----------------|---|
+	return `| Metric | Version 1 (actual master, EXISTS) | Version 2 (fix, IN) | Δ |
+|--------|----------------------------------|---------------------|---|
 | avg    | ${fmt(existsS.avg)} | ${fmt(inS.avg)} | ${delta(existsS.avg, inS.avg)} |
 | p50    | ${fmt(existsS.p50)} | ${fmt(inS.p50)} | ${delta(existsS.p50, inS.p50)} |
 | p95    | ${fmt(existsS.p95)} | ${fmt(inS.p95)} | ${delta(existsS.p95, inS.p95)} |
