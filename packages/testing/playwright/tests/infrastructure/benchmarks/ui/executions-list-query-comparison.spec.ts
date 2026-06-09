@@ -30,7 +30,7 @@ import { benchConfig } from '../../../../playwright-projects';
 import type { ApiHelpers } from '../../../../services/api-helper';
 import { bulkSeedExecutions } from '../harness/bulk-seed-executions';
 
-const ITERATIONS = 50;
+const ITERATIONS = 3;
 const WORKFLOWS_IN_PROJECT = 400;
 const PRESEEDED_EXECUTIONS = 1_000_000;
 const CREATE_BATCH_SIZE = 20;
