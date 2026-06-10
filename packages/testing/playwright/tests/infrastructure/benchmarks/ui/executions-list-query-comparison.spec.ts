@@ -523,7 +523,10 @@ test.describe(
 					const res = await adminApi.request.get('/rest/executions?limit=10&includeData=false');
 					httpLat.push(performance.now() - t0);
 					if (!res.ok()) {
-						console.warn(`  [HTTP ${i + 1}/${ITERATIONS}] status=${res.status()}`);
+						const body = await res.text().catch(() => '(unreadable)');
+						console.warn(
+							`  [HTTP ${i + 1}/${ITERATIONS}] status=${res.status()} body=${body.slice(0, 300)}`,
+						);
 					} else {
 						console.log(`  [HTTP ${i + 1}/${ITERATIONS}] ${httpLat[i]!.toFixed(1)} ms`);
 					}
