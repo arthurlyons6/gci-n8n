@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # GCI n8n - Workflow Automation Core
+  gci-n8n:
+    build:
+      context: ../gci-n8n
+      dockerfile: docker/Dockerfile
+    container_name: gci-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=development
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=gci-postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=gci_n8n
+      - DB_POSTGRESDB_USER=gci_user
+      - DB_POSTGRESDB_PASSWORD=gci_password
+      - N8N_ENCRYPTION_KEY=gci_encryption_key_change_in_production
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=gci_admin_password
+      - WEBHOOK_URL=http://localhost:5678
+      - GENERIC_TIMEZONE=America/New_York
+    volumes:
+      - gci-n8n-data:/home/node/.n8n
+      - ./custom-nodes:/home/node/.n8n/custom
+    depends_on:
+      - gci-postgres
+      - gci-redis
+    networks:
+      - gci-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # GCI PostgreSQL - Primary Database
+  gci-postgres:
+    image: postgres:16-alpine
+    container_name: gci-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=gci_n8n
+      - POSTGRES_USER=gci_user
+      - POSTGRES_PASSWORD=gci_password
+      - POSTGRES_MULTIPLE_DATABASES=gci_n8n,gci_dify,gci_nocodb,gci_windmill,gci_appsmith
+    volumes:
+      - gci-postgres-data:/var/lib/postgresql/data
+      - ./init-sql:/docker-entrypoint-initdb.d
+    networks:
+      - gci-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gci_user -d gci_n8n"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # GCI Redis - Cache & Queue
+  gci-redis:
+    image: redis:7-alpine
+    container_name: gci-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - gci-redis-data:/data
+    networks:
+      - gci-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # GCI MinIO - Object Storage
+  gci-minio:
+    image: minio/minio:latest
+    container_name: gci-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=gci_admin
+      - MINIO_ROOT_PASSWORD=gci_minio_password
+    command: server /data --console-address ":9001"
+    volumes:
+      - gci-minio-data:/data
+    networks:
+      - gci-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  gci-n8n-data:
+  gci-postgres-data:
+  gci-redis-data:
+  gci-minio-data:
+
+networks:
+  gci-network:
+    driver: bridge
